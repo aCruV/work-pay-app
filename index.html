@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Work & Pay">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -55,19 +55,20 @@
     }
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #0000;
+    background: var(--bg);
     color: var(--text);
+    position: fixed;
+    inset: 0;
   }
-  @media (min-width: 481px) { body { background: var(--bg); } }
   .app {
-    max-width: 480px; margin: 0 auto; height: 100vh; height: 100dvh;
+    max-width: 480px; margin: 0 auto; height: 100%;
     position: relative; background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
   }
-  .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 18px 16px calc(100px + env(safe-area-inset-bottom)); }
+  .content { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: 18px 16px calc(100px + env(safe-area-inset-bottom)); }
   .tab-page.hidden { display: none; }
   .large-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 4px 0 14px; }
 
