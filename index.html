@@ -68,7 +68,7 @@
     max-width: 480px; margin: 0 auto; height: 100%;
     position: relative; background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
   }
-  .content { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: 18px 16px calc(100px + env(safe-area-inset-bottom)); }
+  .content { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
   .tab-page.hidden { display: none; }
   .large-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 4px 0 14px; }
 
