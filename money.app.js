@@ -1046,35 +1046,40 @@
     applyLanguage();
   }
 
-  auth.onAuthStateChanged(user => {
-    if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
-    if (user) {
-      currentUser = user;
-      $('accountEmail').textContent = user.email || '';
-      const docRef = db.collection('users').doc(user.uid);
-      docRef.get().then(snap => {
-        if (!snap.exists) {
-          docRef.set(state);
-        }
-        $('authScreen').classList.add('hidden');
-        firestoreUnsub = docRef.onSnapshot(snap => {
-          if (snap.exists) applyRemoteState(snap.data());
-        });
-      }).catch(err => {
-        alert('Could not load your data: ' + err.message);
-      });
-    } else {
-      currentUser = null;
-      authMode = 'signin';
-      updateAuthUI();
-      $('authScreen').classList.remove('hidden');
-    }
-  });
-
   // ---- boot ----
   loadSettingsForm();
   loadGoalForm();
   initSettingsPickers();
   applyLanguage();
   updateAuthUI();
+
+  try {
+    auth.onAuthStateChanged(user => {
+      if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
+      if (user) {
+        currentUser = user;
+        $('accountEmail').textContent = user.email || '';
+        const docRef = db.collection('users').doc(user.uid);
+        docRef.get().then(snap => {
+          if (!snap.exists) {
+            docRef.set(state);
+          }
+          $('authScreen').classList.add('hidden');
+          firestoreUnsub = docRef.onSnapshot(snap => {
+            if (snap.exists) applyRemoteState(snap.data());
+          });
+        }).catch(err => {
+          alert('Could not load your data: ' + err.message);
+        });
+      } else {
+        currentUser = null;
+        authMode = 'signin';
+        updateAuthUI();
+        $('authScreen').classList.remove('hidden');
+      }
+    });
+  } catch (err) {
+    console.error('Firebase failed to initialize:', err);
+    $('authError').textContent = 'Could not connect to the server. Check your internet connection and reload.';
+  }
 })();
