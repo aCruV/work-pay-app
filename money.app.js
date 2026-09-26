@@ -15,14 +15,14 @@
     return {
       settings: {
         currency: '₪',
-        rate: 50,
+        rate: 39.11,
         weekendStartDow: 5,
         weekendStartTime: '00:00',
         weekendEndDow: 0,
         weekendEndTime: '04:00',
         weekendPercent: 150,
         holidayPercent: 150,
-        overtimeThreshold: 0,
+        overtimeThreshold: 8,
         overtimePercent: 125,
         language: 'en',
         goalType: 'hours',
