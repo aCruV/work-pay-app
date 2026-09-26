@@ -195,7 +195,15 @@
 
   let activeTab = 'summary';
   let monthFilter = currentMonthStr();
-  let goalMonth = currentMonthStr();
+  // One selected month is shared by every tab. Goals needs a specific month, so while the
+  // other tabs show "All time" it falls back to the last specific month that was chosen.
+  let lastSpecificMonth = monthFilter;
+  function selectMonth(m) {
+    monthFilter = m;
+    if (m !== 'all') lastSpecificMonth = m;
+    renderDataViews();
+  }
+  function goalMonth() { return monthFilter === 'all' ? lastSpecificMonth : monthFilter; }
   let sheetMode = null;
   let editingId = null;
   let formShift = {};
@@ -319,7 +327,7 @@
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
     el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => {
-      btn.addEventListener('click', () => { monthFilter = btn.dataset.month; renderDataViews(); });
+      btn.addEventListener('click', () => selectMonth(btn.dataset.month));
     });
   }
 
@@ -498,8 +506,9 @@
   function renderGoalPills() {
     const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
     const el = $('goalMonthPills');
-    el.innerHTML = months.map(m => `<button class="pill ${goalMonth===m?'active':''}" data-month="${m}">${monthLabel(m)}</button>`).join('');
-    el.querySelectorAll('.pill').forEach(btn => btn.addEventListener('click', () => { goalMonth = btn.dataset.month; renderGoals(); }));
+    const active = goalMonth();
+    el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}</button>`).join('');
+    el.querySelectorAll('.pill').forEach(btn => btn.addEventListener('click', () => selectMonth(btn.dataset.month)));
   }
   function loadGoalForm() {
     $('goalTargetInput').value = state.settings.goalValue || '';
@@ -516,8 +525,9 @@
 
   function renderGoals() {
     renderGoalPills();
-    const shifts = state.shifts.filter(s => monthKey(s.date) === goalMonth);
-    const incomes = state.incomes.filter(i => monthKey(i.date) === goalMonth);
+    const month = goalMonth();
+    const shifts = state.shifts.filter(s => monthKey(s.date) === month);
+    const incomes = state.incomes.filter(i => monthKey(i.date) === month);
     let totalHours = 0, workPay = 0;
     shifts.forEach(s => { const c = calcShift(s); totalHours += c.totalHours; workPay += c.pay; });
     const otherIncome = incomes.reduce((sum,i) => sum + i.amount, 0);
@@ -578,14 +588,32 @@
   }
   ['setCurrency','setRate','setWkPercent','setHolidayPercent','setOtThreshold','setOtPercent'].forEach(id => $(id).addEventListener('change', readSettingsForm));
 
-  $('exportBtn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  // On phones, hand the file to the Share sheet (a plain download is unreliable in
+  // Home Screen web apps); on computers, download it.
+  function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'work-tracker-backup-' + new Date().toISOString().slice(0,10) + '.json';
+    a.download = filename;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function deliverFile(blob, filename) {
+    const file = typeof File === 'function' ? new File([blob], filename, { type: blob.type }) : null;
+    const touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (touch && file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: filename })
+        .catch(err => { if (!err || err.name !== 'AbortError') downloadBlob(blob, filename); });
+      return;
+    }
+    downloadBlob(blob, filename);
+  }
+
+  $('exportBtn').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    deliverFile(blob, 'work-tracker-backup-' + todayStr() + '.json');
   });
 
   $('importInput').addEventListener('change', (e) => {
@@ -646,6 +674,226 @@
     });
     openSheetOverlay();
   }
+
+  // ---- monthly shift report (.docx, generated in the browser without external libraries) ----
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const CRC_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  function crc32(bytes) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  // A .docx is a ZIP of XML files; an uncompressed ("stored") ZIP is valid and keeps this small.
+  function buildZip(files, mime) {
+    const enc = new TextEncoder();
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+    const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    const parts = [], central = [];
+    let offset = 0;
+    files.forEach(f => {
+      const name = enc.encode(f.name);
+      const data = enc.encode(f.content);
+      const crc = crc32(data);
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true);
+      local.setUint16(4, 20, true);
+      local.setUint16(6, 0x0800, true);
+      local.setUint16(10, dosTime, true);
+      local.setUint16(12, dosDate, true);
+      local.setUint32(14, crc, true);
+      local.setUint32(18, data.length, true);
+      local.setUint32(22, data.length, true);
+      local.setUint16(26, name.length, true);
+      parts.push(new Uint8Array(local.buffer), name, data);
+      const cen = new DataView(new ArrayBuffer(46));
+      cen.setUint32(0, 0x02014b50, true);
+      cen.setUint16(4, 20, true);
+      cen.setUint16(6, 20, true);
+      cen.setUint16(8, 0x0800, true);
+      cen.setUint16(12, dosTime, true);
+      cen.setUint16(14, dosDate, true);
+      cen.setUint32(16, crc, true);
+      cen.setUint32(20, data.length, true);
+      cen.setUint32(24, data.length, true);
+      cen.setUint16(28, name.length, true);
+      cen.setUint32(42, offset, true);
+      central.push(new Uint8Array(cen.buffer), name);
+      offset += 30 + name.length + data.length;
+    });
+    const centralSize = central.reduce((sum, c) => sum + c.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, centralSize, true);
+    end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: mime });
+  }
+
+  const HEBREW_RE = /[֐-׿]/;
+  function xmlText(s) { return escapeHtml(String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '')); }
+  function wRun(text, o = {}) {
+    const sz = (o.size || 10) * 2;
+    return `<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${o.bold ? '<w:b/><w:bCs/>' : ''}${o.color ? `<w:color w:val="${o.color}"/>` : ''}<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>${HEBREW_RE.test(text) ? '<w:rtl/>' : ''}</w:rPr><w:t xml:space="preserve">${xmlText(text)}</w:t></w:r>`;
+  }
+  // Viewers disagree on how "left"/"right" alignment and Word's RTL-table flag behave in
+  // right-to-left documents (iPhone/Mac Quick Look ignores them). So start-aligned text uses
+  // the paragraph's natural alignment, end-aligned numbers are centered in RTL, and RTL tables
+  // are written with their columns already mirrored. That renders the same in every viewer.
+  function jcFor(align, rtl) {
+    if (!align || align === 'left') return '';
+    if (rtl && align === 'right') return 'center';
+    return align;
+  }
+  function wPara(runs, o = {}) {
+    const jc = jcFor(o.align, o.rtl);
+    return `<w:p><w:pPr>${o.rtl ? '<w:bidi/>' : ''}<w:spacing w:before="0" w:after="${o.after ?? 120}"/>${jc ? `<w:jc w:val="${jc}"/>` : ''}</w:pPr>${runs}</w:p>`;
+  }
+  function wCell(text, width, o = {}) {
+    const shd = o.fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${o.fill}"/>` : '';
+    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${shd}<w:vAlign w:val="center"/></w:tcPr>${wPara(wRun(text, { bold: o.bold, size: 9 }), { rtl: o.rtl, after: 0, align: o.align })}</w:tc>`;
+  }
+  function wRow(cells, widths, o = {}) {
+    const order = cells.map((_, i) => i);
+    if (o.rtl) order.reverse();
+    return `<w:tr><w:trPr>${o.header ? '<w:tblHeader/>' : '<w:cantSplit/>'}</w:trPr>${order.map(i => wCell(cells[i][0], widths[i], { rtl: o.rtl, align: cells[i][1], bold: o.bold, fill: o.fill })).join('')}</w:tr>`;
+  }
+  function wTable(widths, rows, rtl) {
+    const border = side => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="C8C8CC"/>`;
+    const grid = rtl ? widths.slice().reverse() : widths;
+    return `<w:tbl><w:tblPr><w:tblW w:w="${widths.reduce((a, b) => a + b, 0)}" w:type="dxa"/>${rtl ? '<w:jc w:val="right"/>' : ''}<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows}</w:tbl>`;
+  }
+
+  function buildReportDocx(month) {
+    const lang = getLang();
+    const rtl = lang === 'he';
+    const locale = rtl ? 'he-IL' : undefined;
+    const s = state.settings;
+    const shifts = state.shifts.filter(x => monthKey(x.date) === month)
+      .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+    const incomes = state.incomes.filter(x => monthKey(x.date) === month)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const monthName = new Date(month + '-01T00:00:00').toLocaleDateString(locale, { month: 'long', year: 'numeric' });
+    const dateFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const dayFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { weekday: 'long' });
+    const dash = '–';
+    const HEAD = 'E8EEF7', TOTAL = 'F2F2F7';
+    const body = [];
+    const para = (text, o = {}) => body.push(wPara(wRun(text, o), { rtl, align: o.align, after: o.after }));
+
+    para(`${t('reportTitle')} ${dash} ${monthName}`, { bold: true, size: 18, after: 80 });
+    if (currentUser && currentUser.email) para(`${t('reportEmployee')}: ${currentUser.email}`, { after: 40 });
+    para(`${t('reportGenerated')}: ${new Date().toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })}`, { color: '6E6E73', after: 220 });
+
+    para(t('reportRates'), { bold: true, size: 12, after: 60 });
+    const overtime = s.overtimeThreshold > 0
+      ? t('reportOvertimeDesc').replace('{p}', s.overtimePercent).replace('{h}', s.overtimeThreshold)
+      : t('reportOvertimeOff');
+    [
+      [t('reportRate'), money(s.rate)],
+      [t('reportWeekend'), `${s.weekendPercent}% · ${DOW_FULL[lang][s.weekendStartDow]} ${s.weekendStartTime} ${dash} ${DOW_FULL[lang][s.weekendEndDow]} ${s.weekendEndTime}`],
+      [t('reportHoliday'), `${s.holidayPercent}%`],
+      [t('reportOvertime'), overtime]
+    ].forEach(([k, v]) => para(`${k}: ${v}`, { after: 20 }));
+    body.push(wPara('', { rtl, after: 200 }));
+
+    para(t('reportShifts'), { bold: true, size: 12, after: 80 });
+    // Landscape A4 usable width is 15398 twips; the note column takes what's left.
+    const sw = [1350, 1250, 850, 850, 950, 1150, 1150, 950, 1450, 5448];
+    let sumHours = 0, sumWeekend = 0, sumOvertime = 0, sumPay = 0;
+    let shiftRows = wRow([[t('colDate')], [t('colDay')], [t('colStart'), 'center'], [t('colEnd'), 'center'], [t('colHours'), 'right'], [t('colWeekend'), 'right'], [t('colOvertime'), 'right'], [t('colHoliday'), 'center'], [t('colPay'), 'right'], [t('colNote')]], sw, { rtl, header: true, bold: true, fill: HEAD });
+    shifts.forEach(x => {
+      const c = calcShift(x);
+      sumHours += c.totalHours; sumWeekend += c.windowHours; sumOvertime += c.overtimeHours; sumPay += c.pay;
+      shiftRows += wRow([
+        [dateFmt(x.date)], [dayFmt(x.date)], [x.startTime, 'center'], [x.endTime, 'center'],
+        [fmt(c.totalHours), 'right'], [c.windowHours > 0 ? fmt(c.windowHours) : dash, 'right'],
+        [c.overtimeHours > 0 ? fmt(c.overtimeHours) : dash, 'right'], [x.isHoliday ? t('reportYes') : dash, 'center'],
+        [money(c.pay), 'right'], [x.note || '']
+      ], sw, { rtl });
+    });
+    shiftRows += wRow([[t('reportTotal')], [''], [''], [''], [fmt(sumHours), 'right'], [fmt(sumWeekend), 'right'], [fmt(sumOvertime), 'right'], [''], [money(sumPay), 'right'], ['']], sw, { rtl, bold: true, fill: TOTAL });
+    body.push(wTable(sw, shiftRows, rtl));
+
+    let sumIncome = 0;
+    if (incomes.length) {
+      body.push(wPara('', { rtl, after: 200 }));
+      para(t('reportOtherIncome'), { bold: true, size: 12, after: 80 });
+      const iw = [1600, 3600, 1800, 8398];
+      let incomeRows = wRow([[t('colDate')], [t('colCategory')], [t('colAmount'), 'right'], [t('colNote')]], iw, { rtl, header: true, bold: true, fill: HEAD });
+      incomes.forEach(x => {
+        sumIncome += x.amount;
+        incomeRows += wRow([[dateFmt(x.date)], [categoryLabel(x.category)], [money(x.amount), 'right'], [x.note || '']], iw, { rtl });
+      });
+      incomeRows += wRow([[t('reportTotal')], [''], [money(sumIncome), 'right'], ['']], iw, { rtl, bold: true, fill: TOTAL });
+      body.push(wTable(iw, incomeRows, rtl));
+    }
+
+    body.push(wPara('', { rtl, after: 200 }));
+    para(`${t('reportShiftCount')}: ${shifts.length}  ·  ${t('colHours')}: ${fmt(sumHours)}  ·  ${t('sumSubWork')}: ${money(sumPay)}${incomes.length ? `  ·  ${t('reportOtherIncome')}: ${money(sumIncome)}` : ''}`, { after: 60 });
+    para(`${t('reportGrandTotal')}: ${money(sumPay + sumIncome)}`, { bold: true, size: 13, after: 240 });
+    para(t('reportFooter'), { size: 8, color: '8E8E93', after: 0 });
+
+    const sect = `<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="360" w:footer="360" w:gutter="0"/>${rtl ? '<w:bidi/>' : ''}</w:sectPr>`;
+    const xmlHead = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    return buildZip([
+      { name: '[Content_Types].xml', content: `${xmlHead}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>` },
+      { name: '_rels/.rels', content: `${xmlHead}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
+      { name: 'word/document.xml', content: `${xmlHead}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body.join('')}${sect}</w:body></w:document>` }
+    ], DOCX_MIME);
+  }
+
+  function openReportSheet() {
+    sheetMode = 'report'; editingId = null;
+    $('sheetTitle').textContent = t('reportSheetTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    const locale = getLang() === 'he' ? 'he-IL' : undefined;
+    const months = Array.from(new Set(state.shifts.map(x => monthKey(x.date)))).sort().reverse();
+    if (!months.length) {
+      $('sheetBody').innerHTML = `<div class="empty-state"><div class="big">${ICON_CLOCK}</div>${escapeHtml(t('reportNoShifts'))}</div>`;
+    } else {
+      $('sheetBody').innerHTML = `
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('reportPickMonth'))}</div>
+        <div class="list-group">${months.map(m => {
+          const list = state.shifts.filter(x => monthKey(x.date) === m);
+          const pay = list.reduce((sum, x) => sum + calcShift(x).pay, 0);
+          const label = new Date(m + '-01T00:00:00').toLocaleDateString(locale, { month: 'long', year: 'numeric' });
+          return `<div class="list-row picker-row" data-report-month="${m}">
+            <div class="rlabel">${escapeHtml(label)}<span class="rsub">${escapeHtml(t('reportShiftsCount').replace('{n}', list.length))} · ${escapeHtml(money(pay))}</span></div>
+            <span class="entry-chevron">›</span>
+          </div>`;
+        }).join('')}</div>
+        <div class="section-footer">${escapeHtml(t('reportHint'))}</div>`;
+      $('sheetBody').querySelectorAll('[data-report-month]').forEach(row => {
+        row.addEventListener('click', () => exportReport(row.dataset.reportMonth));
+      });
+    }
+    openSheetOverlay();
+  }
+
+  function exportReport(month) {
+    let blob;
+    try {
+      blob = buildReportDocx(month);
+    } catch (err) {
+      console.error('Report failed:', err);
+      showToast(t('reportExportFailed'));
+      return;
+    }
+    closeSheetOverlay();
+    deliverFile(blob, `Shift-Report-${month}.docx`);
+  }
+  $('reportBtn').addEventListener('click', openReportSheet);
 
   function refreshAll() {
     loadSettingsForm();
