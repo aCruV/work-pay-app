@@ -57,40 +57,136 @@
     return s;
   }
 
-  function genId() { return Date.now() + '-' + Math.random().toString(36).slice(2); }
-  function escapeHtml(s) { return String(s).replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+  function genId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return Date.now() + '-' + Math.random().toString(36).slice(2);
+  }
+  const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => HTML_ESCAPES[c]); }
+
+  // Limits must stay in sync with firestore.rules.
+  const LIMITS = { shifts: 5000, incomes: 5000, templates: 50, note: 200, category: 40, tplName: 24, currency: 4, importBytes: 2 * 1024 * 1024 };
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+  function str(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
+  function num(v, min, max, fallback) {
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  }
+  function isValidTime(v) { return typeof v === 'string' && TIME_RE.test(v); }
+  function isValidDate(v) {
+    if (typeof v !== 'string' || !DATE_RE.test(v)) return false;
+    const [y, m, d] = v.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+  }
+
+  // Every piece of data from storage, Firestore or a backup file passes through here,
+  // so the rest of the app can trust the shape and never renders unchecked values.
+  function normalizeState(raw) {
+    const def = defaultState().settings;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const s = src.settings && typeof src.settings === 'object' ? src.settings : {};
+    const settings = {
+      currency: str(s.currency, LIMITS.currency).trim() || def.currency,
+      rate: num(s.rate, 0, 100000, def.rate),
+      weekendStartDow: Math.round(num(s.weekendStartDow, 0, 6, def.weekendStartDow)),
+      weekendStartTime: isValidTime(s.weekendStartTime) ? s.weekendStartTime : def.weekendStartTime,
+      weekendEndDow: Math.round(num(s.weekendEndDow, 0, 6, def.weekendEndDow)),
+      weekendEndTime: isValidTime(s.weekendEndTime) ? s.weekendEndTime : def.weekendEndTime,
+      weekendPercent: num(s.weekendPercent, 0, 1000, def.weekendPercent),
+      holidayPercent: num(s.holidayPercent, 0, 1000, def.holidayPercent),
+      overtimeThreshold: num(s.overtimeThreshold, 0, 24, def.overtimeThreshold),
+      overtimePercent: num(s.overtimePercent, 0, 1000, def.overtimePercent),
+      language: s.language === 'he' ? 'he' : 'en',
+      goalType: s.goalType === 'income' ? 'income' : 'hours',
+      goalValue: num(s.goalValue, 0, 10000000, def.goalValue)
+    };
+    const seen = new Set();
+    const uniqueId = v => {
+      let id = typeof v === 'string' && ID_RE.test(v) ? v : genId();
+      while (seen.has(id)) id = genId();
+      seen.add(id);
+      return id;
+    };
+    const list = v => Array.isArray(v) ? v : [];
+    const shifts = list(src.shifts)
+      .filter(x => x && isValidDate(x.date) && isValidTime(x.startTime) && isValidTime(x.endTime))
+      .slice(0, LIMITS.shifts)
+      .map(x => ({ id: uniqueId(x.id), date: x.date, startTime: x.startTime, endTime: x.endTime, isHoliday: x.isHoliday === true, note: str(x.note, LIMITS.note) }));
+    const incomes = list(src.incomes)
+      .filter(x => x && isValidDate(x.date) && num(x.amount, 0, 10000000, 0) > 0)
+      .slice(0, LIMITS.incomes)
+      .map(x => ({ id: uniqueId(x.id), date: x.date, category: str(x.category, LIMITS.category).trim() || 'other', amount: num(x.amount, 0, 10000000, 0), note: str(x.note, LIMITS.note) }));
+    const templates = list(src.templates)
+      .filter(x => x && str(x.name, LIMITS.tplName).trim() && isValidTime(x.startTime) && isValidTime(x.endTime))
+      .slice(0, LIMITS.templates)
+      .map(x => ({ id: uniqueId(x.id), name: str(x.name, LIMITS.tplName).trim(), startTime: x.startTime, endTime: x.endTime }));
+    return { settings, shifts, incomes, templates };
+  }
 
   function load() {
-    const def = defaultState();
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return {
-          settings: Object.assign({}, def.settings, parsed.settings || {}),
-          shifts: parsed.shifts || [],
-          incomes: parsed.incomes || [],
-          templates: parsed.templates || []
-        };
-      }
+      if (raw) return normalizeState(JSON.parse(raw));
     } catch(e) {}
     try {
       const oldRaw = localStorage.getItem(OLD_KEY);
-      if (oldRaw) return migrateFromV1(JSON.parse(oldRaw));
+      if (oldRaw) return normalizeState(migrateFromV1(JSON.parse(oldRaw)));
     } catch(e) {}
-    return def;
+    return defaultState();
+  }
+
+  // OWNER_KEY records which account the local cache belongs to, so one person's
+  // cached data is never uploaded into, or shown to, a different account.
+  const OWNER_KEY = 'workTrackerOwner';
+  function getCacheOwner() { try { return localStorage.getItem(OWNER_KEY); } catch(e) { return null; } }
+  function clearLocalCache() {
+    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); localStorage.removeItem(OWNER_KEY); } catch(e) {}
   }
 
   let state = load();
   let currentUser = null;
   let firestoreUnsub = null;
+  let remoteReady = false;
 
-  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {} }
+  function saveLocal() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      if (currentUser) localStorage.setItem(OWNER_KEY, currentUser.uid);
+    } catch(e) {}
+  }
+
+  // Firestore writes are batched: rapid changes (e.g. scrolling a wheel) become one write.
+  const WRITE_DEBOUNCE_MS = 600;
+  let writeTimer = null;
+  function flushRemoteWrite() {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+    if (!currentUser || !remoteReady) return Promise.resolve();
+    return db.collection('users').doc(currentUser.uid).set(state)
+      .catch(err => { console.error('Firestore save failed:', err); showToast(t('syncFailed')); });
+  }
   function save() {
+    state = normalizeState(state);
     saveLocal();
-    if (currentUser) {
-      db.collection('users').doc(currentUser.uid).set(state).catch(err => console.error('Firestore save failed:', err));
-    }
+    if (!currentUser) return;
+    clearTimeout(writeTimer);
+    writeTimer = setTimeout(flushRemoteWrite, WRITE_DEBOUNCE_MS);
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && writeTimer) flushRemoteWrite(); });
+  window.addEventListener('pagehide', () => { if (writeTimer) flushRemoteWrite(); });
+
+  let toastTimer = null;
+  function showToast(msg) {
+    const el = $('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
   }
 
   function getLang() { return state.settings.language === 'he' ? 'he' : 'en'; }
@@ -341,19 +437,19 @@
       if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${fmt(c.overtimeHours)}h</span>`;
       return `<div class="entry-row-wrap">
         <button class="entry-swipe-delete">${ICON_TRASH}</button>
-        <div class="entry-row" data-id="${s.id}" data-kind="shift">
+        <div class="entry-row" data-id="${escapeHtml(s.id)}" data-kind="shift">
           <div class="entry-main">
-            <div class="entry-date">${dname}</div>
+            <div class="entry-date">${escapeHtml(dname)}</div>
             <div class="entry-sub">${s.startTime}–${s.endTime} · ${fmt(c.totalHours)}h${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
             <div class="entry-badges">${badges}</div>
           </div>
-          <div class="entry-amount">${money(c.pay)}</div>
+          <div class="entry-amount">${escapeHtml(money(c.pay))}</div>
           <div class="entry-chevron">›</div>
         </div>
       </div>`;
     }).join('');
     $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList">${html}</div>`;
-    attachRowHandlers();
+    attachRowHandlers($('shiftsList'));
   }
 
   function renderIncomes() {
@@ -368,25 +464,25 @@
       const dname = formatDateDisplay(i.date);
       return `<div class="entry-row-wrap">
         <button class="entry-swipe-delete">${ICON_TRASH}</button>
-        <div class="entry-row" data-id="${i.id}" data-kind="income">
+        <div class="entry-row" data-id="${escapeHtml(i.id)}" data-kind="income">
           <div class="entry-main">
-            <div class="entry-date">${categoryLabel(i.category)}</div>
-            <div class="entry-sub">${dname}${i.note ? ' · ' + escapeHtml(i.note) : ''}</div>
+            <div class="entry-date">${escapeHtml(categoryLabel(i.category))}</div>
+            <div class="entry-sub">${escapeHtml(dname)}${i.note ? ' · ' + escapeHtml(i.note) : ''}</div>
           </div>
-          <div class="entry-amount">${money(i.amount)}</div>
+          <div class="entry-amount">${escapeHtml(money(i.amount))}</div>
           <div class="entry-chevron">›</div>
         </div>
       </div>`;
     }).join('');
     $('incomeList').outerHTML = `<div class="list-group" id="incomeList">${html}</div>`;
-    attachRowHandlers();
+    attachRowHandlers($('incomeList'));
   }
 
   function deleteShift(id) { state.shifts = state.shifts.filter(s => s.id !== id); save(); renderDataViews(); }
   function deleteIncome(id) { state.incomes = state.incomes.filter(i => i.id !== id); save(); renderDataViews(); }
 
-  function attachRowHandlers() {
-    document.querySelectorAll('.entry-row-wrap').forEach(wrap => {
+  function attachRowHandlers(container) {
+    container.querySelectorAll('.entry-row-wrap').forEach(wrap => {
       const rowEl = wrap.querySelector('.entry-row');
       const id = rowEl.dataset.id;
       const kind = rowEl.dataset.kind;
@@ -414,8 +510,8 @@
     save(); loadGoalForm(); renderGoals();
   }));
   $('goalTargetInput').addEventListener('change', () => {
-    state.settings.goalValue = parseFloat($('goalTargetInput').value) || 0;
-    save(); renderGoals();
+    state.settings.goalValue = num($('goalTargetInput').value, 0, 10000000, 0);
+    save(); loadGoalForm(); renderGoals();
   });
 
   function renderGoals() {
@@ -467,14 +563,17 @@
     $('setOtThreshold').value = s.overtimeThreshold;
     $('setOtPercent').value = s.overtimePercent;
   }
+  // Invalid or out-of-range input keeps the previous value instead of silently becoming 0.
   function readSettingsForm() {
-    state.settings.currency = $('setCurrency').value.trim() || '$';
-    state.settings.rate = parseFloat($('setRate').value) || 0;
-    state.settings.weekendPercent = parseFloat($('setWkPercent').value) || 100;
-    state.settings.holidayPercent = parseFloat($('setHolidayPercent').value) || 100;
-    state.settings.overtimeThreshold = Math.max(0, parseFloat($('setOtThreshold').value) || 0);
-    state.settings.overtimePercent = parseFloat($('setOtPercent').value) || 100;
+    const s = state.settings;
+    s.currency = $('setCurrency').value.trim().slice(0, LIMITS.currency) || s.currency;
+    s.rate = num($('setRate').value, 0, 100000, s.rate);
+    s.weekendPercent = num($('setWkPercent').value, 0, 1000, s.weekendPercent);
+    s.holidayPercent = num($('setHolidayPercent').value, 0, 1000, s.holidayPercent);
+    s.overtimeThreshold = num($('setOtThreshold').value, 0, 24, s.overtimeThreshold);
+    s.overtimePercent = num($('setOtPercent').value, 0, 1000, s.overtimePercent);
     save();
+    loadSettingsForm();
     renderDataViews();
   }
   ['setCurrency','setRate','setWkPercent','setHolidayPercent','setOtThreshold','setOtPercent'].forEach(id => $(id).addEventListener('change', readSettingsForm));
@@ -491,40 +590,42 @@
 
   $('importInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
+    if (file.size > LIMITS.importBytes) { alert(t('alertImportTooBig')); return; }
     const reader = new FileReader();
     reader.onload = () => {
+      let data;
       try {
-        const data = JSON.parse(reader.result);
-        if (!data.settings) throw new Error('Invalid file');
-        const def = defaultState();
-        state = {
-          settings: Object.assign({}, def.settings, data.settings || {}),
-          shifts: data.shifts || [],
-          incomes: data.incomes || [],
-          templates: data.templates || []
-        };
-        save();
-        loadSettingsForm();
-        loadGoalForm();
-        applyLanguage();
-        alert(t('alertImportOk'));
+        data = JSON.parse(reader.result);
+        if (!data || typeof data !== 'object' || !data.settings) throw new Error(t('alertImportInvalid'));
       } catch (err) {
         alert(t('alertImportFail') + err.message);
+        return;
       }
+      if (!confirm(t('confirmImport'))) return;
+      state = normalizeState(data);
+      save();
+      refreshAll();
+      alert(t('alertImportOk'));
     };
+    reader.onerror = () => alert(t('alertImportFail') + t('alertImportInvalid'));
     reader.readAsText(file);
-    e.target.value = '';
   });
 
   $('resetBtn').addEventListener('click', () => {
     if (!confirm(t('confirmErase'))) return;
     state = defaultState();
     save();
+    refreshAll();
+  });
+
+  function refreshAll() {
     loadSettingsForm();
     loadGoalForm();
+    resyncSettingsWheels();
     applyLanguage();
-  });
+  }
 
   // ---- tabs ----
   function switchTab(tab) {
@@ -729,7 +830,7 @@
       return;
     }
     container.innerHTML = state.templates.map(tpl => `
-      <button class="tpl-chip-select" data-apply="${tpl.id}">
+      <button class="tpl-chip-select" data-apply="${escapeHtml(tpl.id)}">
         <span class="tpl-name">${escapeHtml(tpl.name)}</span>
         <span class="tpl-time">${tpl.startTime}–${tpl.endTime}</span>
       </button>`).join('');
@@ -756,7 +857,7 @@
       return;
     }
     el.innerHTML = state.templates.map(tpl => `
-      <div class="list-row picker-row" data-template-id="${tpl.id}">
+      <div class="list-row picker-row" data-template-id="${escapeHtml(tpl.id)}">
         <div class="rlabel">${escapeHtml(tpl.name)}<span class="rsub">${tpl.startTime}–${tpl.endTime}</span></div>
         <span class="entry-chevron">›</span>
       </div>`).join('');
@@ -778,7 +879,7 @@
     $('sheetBody').innerHTML = `
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row"><div class="rlabel" data-i18n="fieldTemplateName">Name</div><input type="text" id="fTplName" placeholder="${t('templateNamePlaceholder')}" value="${escapeHtml(formTemplate.name)}" maxlength="24"></div>
+          <div class="list-row"><div class="rlabel" data-i18n="fieldTemplateName">Name</div><input type="text" id="fTplName" placeholder="${escapeHtml(t('templateNamePlaceholder'))}" value="${escapeHtml(formTemplate.name)}" maxlength="${LIMITS.tplName}"></div>
         </div>
       </div>
       <div class="field-group">
@@ -878,7 +979,7 @@
       </div>
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row"><div class="rlabel" data-i18n="fieldNote">Note</div><input type="text" id="fNote" placeholder="${t('notePlaceholder')}" value="${shift && shift.note ? escapeHtml(shift.note) : ''}"></div>
+          <div class="list-row"><div class="rlabel" data-i18n="fieldNote">Note</div><input type="text" id="fNote" maxlength="${LIMITS.note}" placeholder="${escapeHtml(t('notePlaceholder'))}" value="${shift && shift.note ? escapeHtml(shift.note) : ''}"></div>
         </div>
       </div>
       ${shift ? `<button class="btn-danger btn-block" id="fDelete" data-i18n="deleteShiftBtn">Delete Shift</button>` : ''}
@@ -931,13 +1032,13 @@
               ${CATEGORY_KEYS.map(k => `<option value="${k}" ${k===currentKey?'selected':''}>${CATEGORY_LABELS[lang][k]}</option>`).join('')}
             </select>
           </div>
-          <div class="list-row ${currentKey==='other'?'':'hidden'}" id="fCustomCatRow"><div class="rlabel" data-i18n="fieldCustomLabel">Custom label</div><input type="text" id="fCustomCat" placeholder="${t('customLabelPlaceholder')}" value="${escapeHtml(customVal)}"></div>
-          <div class="list-row"><div class="rlabel" data-i18n="fieldAmount">Amount</div><input type="number" id="fAmount" min="0" step="0.5" value="${income ? income.amount : ''}"></div>
+          <div class="list-row ${currentKey==='other'?'':'hidden'}" id="fCustomCatRow"><div class="rlabel" data-i18n="fieldCustomLabel">Custom label</div><input type="text" id="fCustomCat" maxlength="${LIMITS.category}" placeholder="${escapeHtml(t('customLabelPlaceholder'))}" value="${escapeHtml(customVal)}"></div>
+          <div class="list-row"><div class="rlabel" data-i18n="fieldAmount">Amount</div><input type="number" id="fAmount" min="0" max="10000000" step="0.01" inputmode="decimal" value="${income ? escapeHtml(income.amount) : ''}"></div>
         </div>
       </div>
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row"><div class="rlabel" data-i18n="fieldNote">Note</div><input type="text" id="fNote" placeholder="${t('notePlaceholder')}" value="${income && income.note ? escapeHtml(income.note) : ''}"></div>
+          <div class="list-row"><div class="rlabel" data-i18n="fieldNote">Note</div><input type="text" id="fNote" maxlength="${LIMITS.note}" placeholder="${escapeHtml(t('notePlaceholder'))}" value="${income && income.note ? escapeHtml(income.note) : ''}"></div>
         </div>
       </div>
       ${income ? `<button class="btn-danger btn-block" id="fDelete" data-i18n="deleteIncomeBtn">Delete Entry</button>` : ''}
@@ -958,12 +1059,14 @@
 
   $('sheetSave').addEventListener('click', () => {
     if (sheetMode === 'shift') {
-      if (!formShift.date || !formShift.startTime || !formShift.endTime) { alert(t('alertFillShiftTimes')); return; }
+      if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
+      if (formShift.startTime === formShift.endTime) { alert(t('alertSameTimes')); return; }
+      if (!editingId && state.shifts.length >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
       const shiftObj = {
         id: editingId || genId(),
         date: formShift.date, startTime: formShift.startTime, endTime: formShift.endTime,
         isHoliday: $('fHoliday').checked,
-        note: $('fNote').value.trim()
+        note: $('fNote').value.trim().slice(0, LIMITS.note)
       };
       if (editingId) {
         const idx = state.shifts.findIndex(s => s.id === editingId);
@@ -973,13 +1076,14 @@
       }
     } else if (sheetMode === 'income') {
       const amount = parseFloat($('fAmount').value);
-      let category = $('fCategory').value;
+      let category = CATEGORY_KEYS.includes($('fCategory').value) ? $('fCategory').value : 'other';
       if (category === 'other') {
-        const custom = $('fCustomCat').value.trim();
+        const custom = $('fCustomCat').value.trim().slice(0, LIMITS.category);
         if (custom) category = custom;
       }
-      if (!formIncome.date || !amount || amount <= 0) { alert(t('alertFillIncome')); return; }
-      const incomeObj = { id: editingId || genId(), date: formIncome.date, category, amount, note: $('fNote').value.trim() };
+      if (!isValidDate(formIncome.date) || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) { alert(t('alertFillIncome')); return; }
+      if (!editingId && state.incomes.length >= LIMITS.incomes) { alert(t('alertLimitReached')); return; }
+      const incomeObj = { id: editingId || genId(), date: formIncome.date, category, amount: Math.round(amount * 100) / 100, note: $('fNote').value.trim().slice(0, LIMITS.note) };
       if (editingId) {
         const idx = state.incomes.findIndex(i => i.id === editingId);
         if (idx !== -1) state.incomes[idx] = incomeObj;
@@ -987,8 +1091,10 @@
         state.incomes.push(incomeObj);
       }
     } else if (sheetMode === 'template') {
-      const name = $('fTplName').value.trim();
+      const name = $('fTplName').value.trim().slice(0, LIMITS.tplName);
       if (!name) { alert(t('alertFillTemplateName')); return; }
+      if (formTemplate.startTime === formTemplate.endTime) { alert(t('alertSameTimes')); return; }
+      if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
       const tplObj = { id: editingId || genId(), name, startTime: formTemplate.startTime, endTime: formTemplate.endTime };
       if (editingId) {
         const idx = state.templates.findIndex(x => x.id === editingId);
@@ -1007,62 +1113,197 @@
   });
 
   // ---- auth ----
+  const REMEMBER_KEY = 'workTrackerRememberEmail';
+  const LOCK_KEY = 'workTrackerAuthLock';
+  const RESET_COOLDOWN_MS = 60000;
+  const CREDENTIAL_ERRORS = ['auth/wrong-password', 'auth/user-not-found', 'auth/invalid-credential', 'auth/invalid-login-credentials'];
   let authMode = 'signin';
+  let authBusy = false;
+  let lockTicker = null;
+  let lastResetAt = 0;
+
+  function authMsg(text, isInfo) {
+    const el = $('authError');
+    el.textContent = text;
+    el.classList.toggle('info', !!isInfo);
+  }
+
   function updateAuthUI() {
     const signIn = authMode === 'signin';
     $('authTitle').textContent = signIn ? t('authSignIn') : t('authSignUp');
     $('authSubmitBtn').textContent = signIn ? t('authSignIn') : t('authSignUp');
     $('authToggleBtn').textContent = signIn ? t('authNeedAccount') : t('authHaveAccount');
+    $('authForgotBtn').textContent = t('authForgot');
+    $('authForgotBtn').classList.toggle('hidden', !signIn);
     $('authEmail').placeholder = t('authEmail');
     $('authPassword').placeholder = t('authPassword');
     $('authPassword').autocomplete = signIn ? 'current-password' : 'new-password';
     $('authRememberLabel').textContent = t('authRemember');
-    $('authError').textContent = '';
+    authMsg('');
+    updateLockUI();
   }
-  const REMEMBER_KEY = 'workTrackerRememberEmail';
+
+  // Local lockout after repeated wrong passwords. Firebase also throttles failed
+  // sign-ins on its servers, which is what stops scripted attacks that bypass this page.
+  function getLock() {
+    try {
+      const l = JSON.parse(localStorage.getItem(LOCK_KEY));
+      if (l && typeof l.fails === 'number' && typeof l.until === 'number') return l;
+    } catch(e) {}
+    return { fails: 0, until: 0 };
+  }
+  function setLock(l) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(l)); } catch(e) {} }
+  function lockRemainingSec() { return Math.max(0, Math.ceil((getLock().until - Date.now()) / 1000)); }
+  function registerFailure() {
+    const l = getLock();
+    l.fails += 1;
+    if (l.fails >= 3) l.until = Date.now() + Math.min(300, 15 * Math.pow(2, l.fails - 3)) * 1000;
+    setLock(l);
+  }
+  let showingLock = false;
+  function updateLockUI() {
+    clearInterval(lockTicker);
+    const tick = () => {
+      const sec = lockRemainingSec();
+      $('authSubmitBtn').disabled = authBusy || sec > 0;
+      if (sec > 0) {
+        authMsg(t('authLocked').replace('{s}', sec));
+        showingLock = true;
+      } else {
+        clearInterval(lockTicker);
+        if (showingLock) { authMsg(''); showingLock = false; }
+      }
+    };
+    tick();
+    if (lockRemainingSec() > 0) lockTicker = setInterval(tick, 1000);
+  }
+
+  // Wrong email and wrong password share one message so the form never reveals
+  // which email addresses have accounts.
+  function authErrorMessage(err) {
+    const code = err && err.code;
+    if (CREDENTIAL_ERRORS.includes(code)) return t('authErrCredentials');
+    switch (code) {
+      case 'auth/invalid-email': return t('authErrInvalidEmail');
+      case 'auth/email-already-in-use': return t('authErrEmailInUse');
+      case 'auth/weak-password': return t('authErrPasswordRules');
+      case 'auth/too-many-requests': return t('authErrTooMany');
+      case 'auth/network-request-failed': return t('authErrNetwork');
+      case 'auth/user-disabled': return t('authErrDisabled');
+      default: return t('authErrGeneric');
+    }
+  }
+  function isPlausibleEmail(v) { return v.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
+  function isStrongPassword(v) { return v.length >= 8 && v.length <= 128 && /[A-Za-z]/.test(v) && /\d/.test(v); }
+  function setAuthBusy(busy) { authBusy = busy; updateLockUI(); }
+
   try {
     const savedEmail = localStorage.getItem(REMEMBER_KEY);
     if (savedEmail) $('authEmail').value = savedEmail;
   } catch(e) {}
+  // The fields sit in a <form> so password managers recognize the login, but it never submits itself.
+  $('authForm').addEventListener('submit', e => { e.preventDefault(); $('authSubmitBtn').click(); });
   ['authEmail','authPassword'].forEach(id => $(id).addEventListener('keydown', e => {
-    if (e.key === 'Enter') $('authSubmitBtn').click();
+    if (e.key === 'Enter') { e.preventDefault(); $('authSubmitBtn').click(); }
   }));
   $('authToggleBtn').addEventListener('click', () => {
     authMode = authMode === 'signin' ? 'signup' : 'signin';
     updateAuthUI();
   });
+
   $('authSubmitBtn').addEventListener('click', () => {
+    if (authBusy || lockRemainingSec() > 0) return;
     const email = $('authEmail').value.trim();
     const password = $('authPassword').value;
-    if (!email || !password) { $('authError').textContent = t('authFillFields'); return; }
-    $('authError').textContent = '';
+    if (!email || !password) { authMsg(t('authFillFields')); return; }
+    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail')); return; }
+    if (authMode === 'signup' && !isStrongPassword(password)) { authMsg(t('authErrPasswordRules')); return; }
+    authMsg('');
     const remember = $('authRemember').checked;
     try {
       if (remember) localStorage.setItem(REMEMBER_KEY, email);
       else localStorage.removeItem(REMEMBER_KEY);
     } catch(e) {}
+    setAuthBusy(true);
     const persistence = remember ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
     auth.setPersistence(persistence)
       .then(() => authMode === 'signin'
         ? auth.signInWithEmailAndPassword(email, password)
         : auth.createUserWithEmailAndPassword(email, password))
-      .catch(err => { $('authError').textContent = err.message; });
+      .then(() => { setLock({ fails: 0, until: 0 }); $('authPassword').value = ''; })
+      .catch(err => {
+        if (CREDENTIAL_ERRORS.includes(err && err.code)) registerFailure();
+        if (lockRemainingSec() === 0) authMsg(authErrorMessage(err));
+      })
+      .finally(() => setAuthBusy(false));
   });
-  $('signOutBtn').addEventListener('click', () => { auth.signOut(); });
+
+  // Same confirmation whether or not the email has an account, to avoid revealing registered emails.
+  $('authForgotBtn').addEventListener('click', () => {
+    const email = $('authEmail').value.trim();
+    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail')); return; }
+    if (Date.now() - lastResetAt < RESET_COOLDOWN_MS) { authMsg(t('authResetSent'), true); return; }
+    lastResetAt = Date.now();
+    auth.sendPasswordResetEmail(email)
+      .then(() => authMsg(t('authResetSent'), true))
+      .catch(err => {
+        if (err && err.code === 'auth/network-request-failed') { lastResetAt = 0; authMsg(t('authErrNetwork')); }
+        else authMsg(t('authResetSent'), true);
+      });
+  });
+
+  // Sign-out sends any unsaved change first, then wipes this device's copies of the data.
+  $('signOutBtn').addEventListener('click', () => {
+    $('signOutBtn').disabled = true;
+    const timeout = new Promise(resolve => setTimeout(resolve, 2500));
+    Promise.race([flushRemoteWrite(), timeout])
+      .then(() => auth.signOut())
+      .catch(() => {})
+      .then(() => {
+        clearLocalCache();
+        return db.terminate().then(() => db.clearPersistence()).catch(() => {});
+      })
+      .then(() => location.reload());
+  });
 
   function applyRemoteState(data) {
-    const def = defaultState();
-    state = {
-      settings: Object.assign({}, def.settings, data.settings || {}),
-      shifts: data.shifts || [],
-      incomes: data.incomes || [],
-      templates: data.templates || []
-    };
+    const incoming = normalizeState(data);
+    if (JSON.stringify(incoming) === JSON.stringify(state)) return;
+    state = incoming;
     saveLocal();
-    loadSettingsForm();
-    loadGoalForm();
-    resyncSettingsWheels();
-    applyLanguage();
+    refreshAll();
+  }
+
+  function hideAuthScreen() {
+    $('authScreen').classList.remove('loading');
+    $('authScreen').classList.add('hidden');
+  }
+
+  function startSync(user) {
+    const docRef = db.collection('users').doc(user.uid);
+    const owner = getCacheOwner();
+    const localIsMine = !owner || owner === user.uid;
+    if (!localIsMine) { state = defaultState(); refreshAll(); }
+    let firstSnapshot = true;
+    firestoreUnsub = docRef.onSnapshot(snap => {
+      if (firstSnapshot) { firstSnapshot = false; hideAuthScreen(); }
+      if (snap.exists) {
+        remoteReady = true;
+        // Ignore echoes of our own unconfirmed writes and anything arriving while a
+        // local change is still waiting to be sent, so edits are never overwritten.
+        if (snap.metadata.hasPendingWrites || writeTimer) return;
+        applyRemoteState(snap.data());
+      } else if (!snap.metadata.fromCache) {
+        // New account: seed it with this device's data only if that data belongs to this user.
+        remoteReady = true;
+        saveLocal();
+        flushRemoteWrite();
+      }
+    }, err => {
+      console.error('Sync error:', err);
+      if (firstSnapshot) { firstSnapshot = false; hideAuthScreen(); }
+      showToast(t('syncFailed'));
+    });
   }
 
   // ---- boot ----
@@ -1072,33 +1313,34 @@
   applyLanguage();
   updateAuthUI();
 
+  const authLoadingFallback = setTimeout(() => $('authScreen').classList.remove('loading'), 8000);
   try {
     auth.onAuthStateChanged(user => {
+      clearTimeout(authLoadingFallback);
       if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
       if (user) {
         currentUser = user;
+        remoteReady = false;
         $('accountEmail').textContent = user.email || '';
-        const docRef = db.collection('users').doc(user.uid);
-        docRef.get().then(snap => {
-          if (!snap.exists) {
-            docRef.set(state);
-          }
-          $('authScreen').classList.add('hidden');
-          firestoreUnsub = docRef.onSnapshot(snap => {
-            if (snap.exists) applyRemoteState(snap.data());
-          });
-        }).catch(err => {
-          alert('Could not load your data: ' + err.message);
-        });
+        startSync(user);
       } else {
         currentUser = null;
+        remoteReady = false;
+        clearTimeout(writeTimer);
+        writeTimer = null;
+        // A cache stamped with an account that's no longer signed in (e.g. "Remember me"
+        // was off) is private data, so it's removed rather than left on the device.
+        if (getCacheOwner()) { clearLocalCache(); state = defaultState(); refreshAll(); }
+        closeSheetOverlay();
         authMode = 'signin';
         updateAuthUI();
-        $('authScreen').classList.remove('hidden');
+        $('authScreen').classList.remove('loading', 'hidden');
       }
     });
   } catch (err) {
     console.error('Firebase failed to initialize:', err);
-    $('authError').textContent = 'Could not connect to the server. Check your internet connection and reload.';
+    clearTimeout(authLoadingFallback);
+    $('authScreen').classList.remove('loading');
+    authMsg(t('authErrNetwork'));
   }
 })();

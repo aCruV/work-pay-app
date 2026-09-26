@@ -1,3 +1,4 @@
+// This config is meant to be public; access is enforced by firestore.rules and Firebase Auth.
 const firebaseConfig = {
   apiKey: "AIzaSyCSSrv-SZKozD_ITcS6OSgJOjOyvWaZFPE",
   authDomain: "shifts-app-7602e.firebaseapp.com",
@@ -9,3 +10,5 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+// Keeps a local copy so edits made offline survive a reload and sync when back online.
+db.enablePersistence({ synchronizeTabs: true }).catch(err => console.warn('Offline persistence unavailable:', err.code));
