@@ -229,6 +229,11 @@
   .auth-screen.hidden { display: none; }
   .auth-title { font-size: 28px; font-weight: 800; margin-bottom: 20px; text-align: center; }
   .auth-error { color: var(--red); font-size: 13px; margin: 10px 4px 4px; min-height: 16px; text-align: center; }
+  .auth-field { display: block; border-bottom: 1px solid var(--sep); cursor: text; }
+  .auth-field:last-child { border-bottom: none; }
+  .auth-field input { display: block; width: 100%; border: none; background: transparent; font-size: 16px; color: var(--text); padding: 14px; }
+  .auth-field input:focus { outline: none; }
+  .auth-field input::placeholder { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -237,8 +242,8 @@
     <div class="auth-card">
       <div class="auth-title" id="authTitle">Sign In</div>
       <div class="list-group">
-        <div class="list-row"><div class="rlabel">Email</div><input type="email" id="authEmail" autocomplete="email" autocapitalize="none"></div>
-        <div class="list-row"><div class="rlabel">Password</div><input type="password" id="authPassword" autocomplete="current-password"></div>
+        <label class="auth-field"><input type="email" id="authEmail" placeholder="Email" autocomplete="email" autocapitalize="none" spellcheck="false"></label>
+        <label class="auth-field"><input type="password" id="authPassword" placeholder="Password" autocomplete="current-password"></label>
       </div>
       <div class="auth-error" id="authError"></div>
       <button class="btn-accent btn-block" id="authSubmitBtn">Sign In</button>

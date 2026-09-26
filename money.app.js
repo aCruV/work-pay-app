@@ -1013,8 +1013,14 @@
     $('authTitle').textContent = signIn ? t('authSignIn') : t('authSignUp');
     $('authSubmitBtn').textContent = signIn ? t('authSignIn') : t('authSignUp');
     $('authToggleBtn').textContent = signIn ? t('authNeedAccount') : t('authHaveAccount');
+    $('authEmail').placeholder = t('authEmail');
+    $('authPassword').placeholder = t('authPassword');
+    $('authPassword').autocomplete = signIn ? 'current-password' : 'new-password';
     $('authError').textContent = '';
   }
+  ['authEmail','authPassword'].forEach(id => $(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') $('authSubmitBtn').click();
+  }));
   $('authToggleBtn').addEventListener('click', () => {
     authMode = authMode === 'signin' ? 'signup' : 'signin';
     updateAuthUI();
