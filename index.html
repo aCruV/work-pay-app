@@ -99,7 +99,7 @@
   .list-row:last-child { border-bottom: none; }
   .list-row .rlabel { font-size: 15px; }
   .list-row .rlabel .rsub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; font-weight: 400; }
-  .list-row input[type=number], .list-row input[type=text], .list-row select {
+  .list-row input[type=number], .list-row input[type=text], .list-row input[type=email], .list-row input[type=password], .list-row select {
     border: none; background: transparent; font-size: 15px; color: var(--accent);
     text-align: end; font-weight: 600; max-width: 52%;
   }
@@ -223,10 +223,29 @@
   .goal-percent { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
   .goal-achieved { font-size: 15px; font-weight: 700; margin-top: 10px; }
   .goal-remaining { font-size: 13px; color: var(--muted); }
+
+  /* auth */
+  .auth-screen { position: absolute; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; justify-content: center; padding: 24px; }
+  .auth-screen.hidden { display: none; }
+  .auth-title { font-size: 28px; font-weight: 800; margin-bottom: 20px; text-align: center; }
+  .auth-error { color: var(--red); font-size: 13px; margin: 10px 4px 4px; min-height: 16px; text-align: center; }
 </style>
 </head>
 <body>
 <div class="app">
+  <div class="auth-screen" id="authScreen">
+    <div class="auth-card">
+      <div class="auth-title" id="authTitle">Sign In</div>
+      <div class="list-group">
+        <div class="list-row"><div class="rlabel">Email</div><input type="email" id="authEmail" autocomplete="email" autocapitalize="none"></div>
+        <div class="list-row"><div class="rlabel">Password</div><input type="password" id="authPassword" autocomplete="current-password"></div>
+      </div>
+      <div class="auth-error" id="authError"></div>
+      <button class="btn-accent btn-block" id="authSubmitBtn">Sign In</button>
+      <button class="btn-plain btn-block" id="authToggleBtn" style="margin-top:10px;">Need an account? Sign Up</button>
+    </div>
+  </div>
+
   <div class="content" id="content">
 
     <section class="tab-page" id="tab-summary">
@@ -291,6 +310,12 @@
 
     <section class="tab-page hidden" id="tab-settings">
       <div class="large-title" data-i18n="titleSettings">Settings</div>
+
+      <div class="section-header" data-i18n="sectionAccount">Account</div>
+      <div class="list-group">
+        <div class="list-row"><div class="rlabel" data-i18n="rowSignedInAs">Signed in as</div><div class="picker-value" id="accountEmail"></div></div>
+      </div>
+      <button class="btn-danger btn-block" id="signOutBtn" style="margin-top:10px;" data-i18n="btnSignOut">Sign Out</button>
 
       <div class="section-header" data-i18n="sectionLanguage">Language</div>
       <div class="list-group">
@@ -456,6 +481,10 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="money.firebase.js"></script>
 <script src="money.i18n.js"></script>
 <script src="money.app.js"></script>
 </body>

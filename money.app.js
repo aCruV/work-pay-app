@@ -82,7 +82,16 @@
   }
 
   let state = load();
-  function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+  let currentUser = null;
+  let firestoreUnsub = null;
+
+  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {} }
+  function save() {
+    saveLocal();
+    if (currentUser) {
+      db.collection('users').doc(currentUser.uid).set(state).catch(err => console.error('Firestore save failed:', err));
+    }
+  }
 
   function getLang() { return state.settings.language === 'he' ? 'he' : 'en'; }
   function t(key) { return I18N[getLang()][key] || key; }
@@ -641,43 +650,47 @@
   }
 
   // ---- settings persistent wheels (weekend window) ----
-  function initSettingsPickers() {
+  function setWkTime(field, part, idx) {
+    const cur = state.settings[field].split(':').map(Number);
+    if (part==='hour') cur[0]=idx; else cur[1]=idx;
+    state.settings[field] = String(cur[0]).padStart(2,'0')+':'+String(cur[1]).padStart(2,'0');
+    save(); updateSettingsPickerValues(); renderDataViews();
+  }
+
+  function resyncSettingsWheels() {
     const s = state.settings;
     const lang = getLang();
 
     buildWheelColumn($('wkStartDayCol'), DOW_FULL[lang], s.weekendStartDow);
-    bindWheelScroll($('wkStartDayCol'), idx => { state.settings.weekendStartDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
     bindWheelClicks($('wkStartDayCol'), idx => { state.settings.weekendStartDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
 
     buildWheelColumn($('wkEndDayCol'), DOW_FULL[lang], s.weekendEndDow);
-    bindWheelScroll($('wkEndDayCol'), idx => { state.settings.weekendEndDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
     bindWheelClicks($('wkEndDayCol'), idx => { state.settings.weekendEndDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
-
-    function setWkTime(field, part, idx) {
-      const cur = state.settings[field].split(':').map(Number);
-      if (part==='hour') cur[0]=idx; else cur[1]=idx;
-      state.settings[field] = String(cur[0]).padStart(2,'0')+':'+String(cur[1]).padStart(2,'0');
-      save(); updateSettingsPickerValues(); renderDataViews();
-    }
 
     const [sh,sm] = s.weekendStartTime.split(':').map(Number);
     buildWheelColumn($('wkStartHourCol'), HOURS, sh);
     buildWheelColumn($('wkStartMinCol'), MINUTES, sm);
-    bindWheelScroll($('wkStartHourCol'), idx => setWkTime('weekendStartTime','hour',idx));
-    bindWheelScroll($('wkStartMinCol'), idx => setWkTime('weekendStartTime','minute',idx));
     bindWheelClicks($('wkStartHourCol'), idx => setWkTime('weekendStartTime','hour',idx));
     bindWheelClicks($('wkStartMinCol'), idx => setWkTime('weekendStartTime','minute',idx));
 
     const [eh,em] = s.weekendEndTime.split(':').map(Number);
     buildWheelColumn($('wkEndHourCol'), HOURS, eh);
     buildWheelColumn($('wkEndMinCol'), MINUTES, em);
-    bindWheelScroll($('wkEndHourCol'), idx => setWkTime('weekendEndTime','hour',idx));
-    bindWheelScroll($('wkEndMinCol'), idx => setWkTime('weekendEndTime','minute',idx));
     bindWheelClicks($('wkEndHourCol'), idx => setWkTime('weekendEndTime','hour',idx));
     bindWheelClicks($('wkEndMinCol'), idx => setWkTime('weekendEndTime','minute',idx));
 
-    setupPickerToggles(document);
     updateSettingsPickerValues();
+  }
+
+  function initSettingsPickers() {
+    resyncSettingsWheels();
+    bindWheelScroll($('wkStartDayCol'), idx => { state.settings.weekendStartDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
+    bindWheelScroll($('wkEndDayCol'), idx => { state.settings.weekendEndDow = idx; save(); updateSettingsPickerValues(); renderDataViews(); });
+    bindWheelScroll($('wkStartHourCol'), idx => setWkTime('weekendStartTime','hour',idx));
+    bindWheelScroll($('wkStartMinCol'), idx => setWkTime('weekendStartTime','minute',idx));
+    bindWheelScroll($('wkEndHourCol'), idx => setWkTime('weekendEndTime','hour',idx));
+    bindWheelScroll($('wkEndMinCol'), idx => setWkTime('weekendEndTime','minute',idx));
+    setupPickerToggles(document);
   }
 
   function updateSettingsPickerValues() {
@@ -993,9 +1006,75 @@
     renderDataViews();
   });
 
+  // ---- auth ----
+  let authMode = 'signin';
+  function updateAuthUI() {
+    const signIn = authMode === 'signin';
+    $('authTitle').textContent = signIn ? t('authSignIn') : t('authSignUp');
+    $('authSubmitBtn').textContent = signIn ? t('authSignIn') : t('authSignUp');
+    $('authToggleBtn').textContent = signIn ? t('authNeedAccount') : t('authHaveAccount');
+    $('authError').textContent = '';
+  }
+  $('authToggleBtn').addEventListener('click', () => {
+    authMode = authMode === 'signin' ? 'signup' : 'signin';
+    updateAuthUI();
+  });
+  $('authSubmitBtn').addEventListener('click', () => {
+    const email = $('authEmail').value.trim();
+    const password = $('authPassword').value;
+    if (!email || !password) { $('authError').textContent = t('authFillFields'); return; }
+    $('authError').textContent = '';
+    const action = authMode === 'signin'
+      ? auth.signInWithEmailAndPassword(email, password)
+      : auth.createUserWithEmailAndPassword(email, password);
+    action.catch(err => { $('authError').textContent = err.message; });
+  });
+  $('signOutBtn').addEventListener('click', () => { auth.signOut(); });
+
+  function applyRemoteState(data) {
+    const def = defaultState();
+    state = {
+      settings: Object.assign({}, def.settings, data.settings || {}),
+      shifts: data.shifts || [],
+      incomes: data.incomes || [],
+      templates: data.templates || []
+    };
+    saveLocal();
+    loadSettingsForm();
+    loadGoalForm();
+    resyncSettingsWheels();
+    applyLanguage();
+  }
+
+  auth.onAuthStateChanged(user => {
+    if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
+    if (user) {
+      currentUser = user;
+      $('accountEmail').textContent = user.email || '';
+      const docRef = db.collection('users').doc(user.uid);
+      docRef.get().then(snap => {
+        if (!snap.exists) {
+          docRef.set(state);
+        }
+        $('authScreen').classList.add('hidden');
+        firestoreUnsub = docRef.onSnapshot(snap => {
+          if (snap.exists) applyRemoteState(snap.data());
+        });
+      }).catch(err => {
+        alert('Could not load your data: ' + err.message);
+      });
+    } else {
+      currentUser = null;
+      authMode = 'signin';
+      updateAuthUI();
+      $('authScreen').classList.remove('hidden');
+    }
+  });
+
   // ---- boot ----
   loadSettingsForm();
   loadGoalForm();
   initSettingsPickers();
   applyLanguage();
+  updateAuthUI();
 })();
