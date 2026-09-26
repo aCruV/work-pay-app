@@ -888,14 +888,35 @@
       el.innerHTML = `<div class="list-row"><div class="rlabel" style="color:var(--muted);">${t('templatesEmpty')}</div></div>`;
       return;
     }
-    el.innerHTML = state.templates.map(tpl => `
-      <div class="list-row picker-row" data-template-id="${escapeHtml(tpl.id)}">
+    const last = state.templates.length - 1;
+    const arrow = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+    el.innerHTML = state.templates.map((tpl, i) => `
+      <div class="list-row picker-row tpl-row" data-template-id="${escapeHtml(tpl.id)}">
         <div class="rlabel">${escapeHtml(tpl.name)}<span class="rsub">${tpl.startTime}–${tpl.endTime}</span></div>
+        ${last > 0 ? `<div class="tpl-order">
+          <button type="button" class="tpl-move" data-move="-1" aria-label="${escapeHtml(t('moveUp'))}" ${i === 0 ? 'disabled' : ''}>${arrow('M6 15l6-6 6 6')}</button>
+          <button type="button" class="tpl-move" data-move="1" aria-label="${escapeHtml(t('moveDown'))}" ${i === last ? 'disabled' : ''}>${arrow('M6 9l6 6 6-6')}</button>
+        </div>` : ''}
         <span class="entry-chevron">›</span>
       </div>`).join('');
     el.querySelectorAll('[data-template-id]').forEach(row => {
       row.addEventListener('click', () => openTemplateSheet(row.dataset.templateId));
     });
+    el.querySelectorAll('.tpl-move').forEach(btn => btn.addEventListener('click', e => {
+      e.stopPropagation();
+      moveTemplate(btn.closest('[data-template-id]').dataset.templateId, parseInt(btn.dataset.move, 10));
+    }));
+  }
+
+  function moveTemplate(id, dir) {
+    const i = state.templates.findIndex(x => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= state.templates.length) return;
+    const list = state.templates.slice();
+    [list[i], list[j]] = [list[j], list[i]];
+    state.templates = list;
+    save();
+    renderTemplatesSettings();
   }
   $('addTemplateBtn').addEventListener('click', () => openTemplateSheet(null));
 
