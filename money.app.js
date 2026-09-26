@@ -613,12 +613,39 @@
     reader.readAsText(file);
   });
 
-  $('resetBtn').addEventListener('click', () => {
-    if (!confirm(t('confirmErase'))) return;
-    state = defaultState();
-    save();
-    refreshAll();
-  });
+  $('resetBtn').addEventListener('click', openEraseSheet);
+
+  // Erasing also wipes the cloud copy, so it needs a typed confirmation, not just a tap.
+  function openEraseSheet() {
+    sheetMode = 'erase'; editingId = null;
+    const word = t('eraseWord');
+    $('sheetTitle').textContent = t('eraseTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `
+      <div class="erase-warning"><strong>${escapeHtml(t('eraseWarnTitle'))}</strong>${escapeHtml(t('eraseWarnBody'))}</div>
+      <div class="field-group">
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('eraseTypeLabel').replace('{w}', word))}</div>
+        <div class="list-group"><label class="auth-field"><input type="text" id="fEraseConfirm" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${escapeHtml(word)}"></label></div>
+      </div>
+      <button type="button" class="btn-danger btn-block" id="fEraseBtn" disabled>${escapeHtml(t('eraseConfirmBtn'))}</button>
+    `;
+    const input = $('fEraseConfirm');
+    const btn = $('fEraseBtn');
+    const matches = () => input.value.trim().toUpperCase() === word.toUpperCase();
+    input.addEventListener('input', () => { btn.disabled = !matches(); });
+    btn.addEventListener('click', () => {
+      if (!matches()) return;
+      const language = state.settings.language;
+      state = defaultState();
+      state.settings.language = language;
+      save();
+      flushRemoteWrite();
+      closeSheetOverlay();
+      refreshAll();
+      showToast(t('eraseDone'));
+    });
+    openSheetOverlay();
+  }
 
   function refreshAll() {
     loadSettingsForm();
@@ -644,7 +671,12 @@
 
   // ---- sheet plumbing ----
   function openSheetOverlay() { $('sheetOverlay').classList.remove('hidden'); }
-  function closeSheetOverlay() { $('sheetOverlay').classList.add('hidden'); sheetMode = null; editingId = null; }
+  function closeSheetOverlay() {
+    $('sheetOverlay').classList.add('hidden');
+    $('sheetSave').style.visibility = '';
+    sheetMode = null;
+    editingId = null;
+  }
   $('sheetCancel').addEventListener('click', closeSheetOverlay);
   $('sheetOverlay').addEventListener('click', (e) => { if (e.target === $('sheetOverlay')) closeSheetOverlay(); });
 
