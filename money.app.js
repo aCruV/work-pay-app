@@ -1575,9 +1575,26 @@
     refreshAll();
   }
 
+  // The launch screen stays until there's something real to show (the app with data, or the
+  // sign-in form), and at least SPLASH_MIN_MS so it never just flickers.
+  const SPLASH_MIN_MS = 700;
+  let splashHidden = false;
+  function hideSplash() {
+    if (splashHidden) return;
+    splashHidden = true;
+    const wait = Math.max(0, SPLASH_MIN_MS - performance.now());
+    setTimeout(() => {
+      const el = $('splash');
+      if (!el) return;
+      el.classList.add('done');
+      setTimeout(() => el.remove(), 450);
+    }, wait);
+  }
+
   function hideAuthScreen() {
     $('authScreen').classList.remove('loading');
     $('authScreen').classList.add('hidden');
+    hideSplash();
   }
 
   function startSync(user) {
@@ -1614,7 +1631,7 @@
   applyLanguage();
   updateAuthUI();
 
-  const authLoadingFallback = setTimeout(() => $('authScreen').classList.remove('loading'), 8000);
+  const authLoadingFallback = setTimeout(() => { $('authScreen').classList.remove('loading'); hideSplash(); }, 8000);
   try {
     auth.onAuthStateChanged(user => {
       clearTimeout(authLoadingFallback);
@@ -1636,6 +1653,7 @@
         authMode = 'signin';
         updateAuthUI();
         $('authScreen').classList.remove('loading', 'hidden');
+        hideSplash();
       }
     });
   } catch (err) {
@@ -1643,5 +1661,6 @@
     clearTimeout(authLoadingFallback);
     $('authScreen').classList.remove('loading');
     authMsg(t('authErrNetwork'));
+    hideSplash();
   }
 })();

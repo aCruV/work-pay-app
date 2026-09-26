@@ -15,4 +15,9 @@
       }
     }
   } catch (e) {}
+  // Failsafe: even if the app script fails to load, never leave the launch screen up forever.
+  setTimeout(function () {
+    var s = document.getElementById('splash');
+    if (s) s.classList.add('done');
+  }, 12000);
 })();
