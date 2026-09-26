@@ -98,7 +98,7 @@
   function categoryLabel(cat) { return CATEGORY_LABELS[getLang()][cat] || cat; }
 
   let activeTab = 'summary';
-  let monthFilter = 'all';
+  let monthFilter = currentMonthStr();
   let goalMonth = currentMonthStr();
   let sheetMode = null;
   let editingId = null;
@@ -218,7 +218,7 @@
   }
 
   function renderPills(containerId) {
-    const months = allMonths();
+    const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
     const el = $(containerId);
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
     el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}</button>`).join('');
@@ -1016,8 +1016,14 @@
     $('authEmail').placeholder = t('authEmail');
     $('authPassword').placeholder = t('authPassword');
     $('authPassword').autocomplete = signIn ? 'current-password' : 'new-password';
+    $('authRememberLabel').textContent = t('authRemember');
     $('authError').textContent = '';
   }
+  const REMEMBER_KEY = 'workTrackerRememberEmail';
+  try {
+    const savedEmail = localStorage.getItem(REMEMBER_KEY);
+    if (savedEmail) $('authEmail').value = savedEmail;
+  } catch(e) {}
   ['authEmail','authPassword'].forEach(id => $(id).addEventListener('keydown', e => {
     if (e.key === 'Enter') $('authSubmitBtn').click();
   }));
@@ -1030,10 +1036,17 @@
     const password = $('authPassword').value;
     if (!email || !password) { $('authError').textContent = t('authFillFields'); return; }
     $('authError').textContent = '';
-    const action = authMode === 'signin'
-      ? auth.signInWithEmailAndPassword(email, password)
-      : auth.createUserWithEmailAndPassword(email, password);
-    action.catch(err => { $('authError').textContent = err.message; });
+    const remember = $('authRemember').checked;
+    try {
+      if (remember) localStorage.setItem(REMEMBER_KEY, email);
+      else localStorage.removeItem(REMEMBER_KEY);
+    } catch(e) {}
+    const persistence = remember ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
+    auth.setPersistence(persistence)
+      .then(() => authMode === 'signin'
+        ? auth.signInWithEmailAndPassword(email, password)
+        : auth.createUserWithEmailAndPassword(email, password))
+      .catch(err => { $('authError').textContent = err.message; });
   });
   $('signOutBtn').addEventListener('click', () => { auth.signOut(); });
 
