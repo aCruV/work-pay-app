@@ -28,6 +28,7 @@
         goalType: 'hours',
         goalValue: 0
       },
+      rateSets: [],
       shifts: [],
       incomes: [],
       templates: []
@@ -65,7 +66,8 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => HTML_ESCAPES[c]); }
 
   // Limits must stay in sync with firestore.rules.
-  const LIMITS = { shifts: 5000, incomes: 5000, templates: 50, note: 200, category: 40, tplName: 24, currency: 4, importBytes: 2 * 1024 * 1024 };
+  // Sized so a full account stays well under Firestore's 1 MiB per-document limit.
+  const LIMITS = { shifts: 3000, incomes: 1500, templates: 50, rateSets: 500, note: 200, category: 40, tplName: 24, currency: 4, importBytes: 2 * 1024 * 1024 };
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const ID_RE = /^[A-Za-z0-9-]{1,64}$/;
@@ -83,27 +85,37 @@
     return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
   }
 
+  // The pay settings that decide what a shift earns. Each shift keeps its own copy (a "rate
+  // set") so changing rates later never rewrites the pay of shifts already worked.
+  const RATE_FIELDS = ['rate', 'weekendStartDow', 'weekendStartTime', 'weekendEndDow', 'weekendEndTime', 'weekendPercent', 'holidayPercent', 'overtimeThreshold', 'overtimePercent'];
+  function ratesFrom(src, fallback) {
+    const f = fallback || defaultState().settings;
+    return {
+      rate: num(src.rate, 0, 100000, f.rate),
+      weekendStartDow: Math.round(num(src.weekendStartDow, 0, 6, f.weekendStartDow)),
+      weekendStartTime: isValidTime(src.weekendStartTime) ? src.weekendStartTime : f.weekendStartTime,
+      weekendEndDow: Math.round(num(src.weekendEndDow, 0, 6, f.weekendEndDow)),
+      weekendEndTime: isValidTime(src.weekendEndTime) ? src.weekendEndTime : f.weekendEndTime,
+      weekendPercent: num(src.weekendPercent, 0, 1000, f.weekendPercent),
+      holidayPercent: num(src.holidayPercent, 0, 1000, f.holidayPercent),
+      overtimeThreshold: num(src.overtimeThreshold, 0, 24, f.overtimeThreshold),
+      overtimePercent: num(src.overtimePercent, 0, 1000, f.overtimePercent)
+    };
+  }
+  function rateKey(r) { return RATE_FIELDS.map(k => r[k]).join('|'); }
+
   // Every piece of data from storage, Firestore or a backup file passes through here,
   // so the rest of the app can trust the shape and never renders unchecked values.
   function normalizeState(raw) {
     const def = defaultState().settings;
     const src = raw && typeof raw === 'object' ? raw : {};
     const s = src.settings && typeof src.settings === 'object' ? src.settings : {};
-    const settings = {
+    const settings = Object.assign(ratesFrom(s, def), {
       currency: str(s.currency, LIMITS.currency).trim() || def.currency,
-      rate: num(s.rate, 0, 100000, def.rate),
-      weekendStartDow: Math.round(num(s.weekendStartDow, 0, 6, def.weekendStartDow)),
-      weekendStartTime: isValidTime(s.weekendStartTime) ? s.weekendStartTime : def.weekendStartTime,
-      weekendEndDow: Math.round(num(s.weekendEndDow, 0, 6, def.weekendEndDow)),
-      weekendEndTime: isValidTime(s.weekendEndTime) ? s.weekendEndTime : def.weekendEndTime,
-      weekendPercent: num(s.weekendPercent, 0, 1000, def.weekendPercent),
-      holidayPercent: num(s.holidayPercent, 0, 1000, def.holidayPercent),
-      overtimeThreshold: num(s.overtimeThreshold, 0, 24, def.overtimeThreshold),
-      overtimePercent: num(s.overtimePercent, 0, 1000, def.overtimePercent),
       language: s.language === 'he' ? 'he' : 'en',
       goalType: s.goalType === 'income' ? 'income' : 'hours',
       goalValue: num(s.goalValue, 0, 10000000, def.goalValue)
-    };
+    });
     const seen = new Set();
     const uniqueId = v => {
       let id = typeof v === 'string' && ID_RE.test(v) ? v : genId();
@@ -112,10 +124,34 @@
       return id;
     };
     const list = v => Array.isArray(v) ? v : [];
+
+    const rateSets = [];
+    const rateIdByKey = new Map();
+    const rateIdRemap = new Map();
+    const addRateSet = (r, wantedId) => {
+      const key = rateKey(r);
+      if (rateIdByKey.has(key)) return rateIdByKey.get(key);
+      const id = uniqueId(wantedId);
+      rateSets.push(Object.assign({ id }, r));
+      rateIdByKey.set(key, id);
+      return id;
+    };
+    list(src.rateSets).slice(0, LIMITS.rateSets).forEach(x => {
+      if (x && typeof x === 'object' && typeof x.id === 'string') rateIdRemap.set(x.id, addRateSet(ratesFrom(x, settings), x.id));
+    });
+    // Shifts saved before rate history existed get the settings in effect now.
+    let currentRateId = null;
+    const fallbackRateId = () => currentRateId || (currentRateId = addRateSet(ratesFrom(settings, settings)));
+
     const shifts = list(src.shifts)
       .filter(x => x && isValidDate(x.date) && isValidTime(x.startTime) && isValidTime(x.endTime))
       .slice(0, LIMITS.shifts)
-      .map(x => ({ id: uniqueId(x.id), date: x.date, startTime: x.startTime, endTime: x.endTime, isHoliday: x.isHoliday === true, note: str(x.note, LIMITS.note) }));
+      .map(x => ({
+        id: uniqueId(x.id), date: x.date, startTime: x.startTime, endTime: x.endTime,
+        isHoliday: x.isHoliday === true, note: str(x.note, LIMITS.note),
+        rateId: typeof x.rateId === 'string' && rateIdRemap.has(x.rateId) ? rateIdRemap.get(x.rateId) : fallbackRateId()
+      }));
+    const usedRateIds = new Set(shifts.map(x => x.rateId));
     const incomes = list(src.incomes)
       .filter(x => x && isValidDate(x.date) && num(x.amount, 0, 10000000, 0) > 0)
       .slice(0, LIMITS.incomes)
@@ -124,7 +160,21 @@
       .filter(x => x && str(x.name, LIMITS.tplName).trim() && isValidTime(x.startTime) && isValidTime(x.endTime))
       .slice(0, LIMITS.templates)
       .map(x => ({ id: uniqueId(x.id), name: str(x.name, LIMITS.tplName).trim(), startTime: x.startTime, endTime: x.endTime }));
-    return { settings, shifts, incomes, templates };
+    return { settings, rateSets: rateSets.filter(r => usedRateIds.has(r.id)), shifts, incomes, templates };
+  }
+
+  function ratesFor(shift) {
+    return state.rateSets.find(r => r.id === shift.rateId) || state.settings;
+  }
+  function currentRates() { return ratesFrom(state.settings, state.settings); }
+  function ensureCurrentRateSet() {
+    const r = currentRates();
+    const key = rateKey(r);
+    const found = state.rateSets.find(x => rateKey(x) === key);
+    if (found) return found.id;
+    const id = genId();
+    state.rateSets.push(Object.assign({ id }, r));
+    return id;
   }
 
   function load() {
@@ -180,13 +230,43 @@
   window.addEventListener('pagehide', () => { if (writeTimer) flushRemoteWrite(); });
 
   let toastTimer = null;
-  function showToast(msg) {
+  function showToast(msg, action) {
     const el = $('toast');
     if (!el) return;
-    el.textContent = msg;
+    el.textContent = '';
+    const text = document.createElement('span');
+    text.textContent = msg;
+    el.appendChild(text);
+    if (action) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => { el.classList.remove('show'); action.onClick(); });
+      el.appendChild(btn);
+    }
+    el.classList.toggle('has-action', !!action);
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+    toastTimer = setTimeout(() => el.classList.remove('show'), action ? 8000 : 4000);
+  }
+
+  // Big, destructive changes (erase, import, restore, re-rating a month) can be undone right after.
+  let undoSnapshot = null;
+  function rememberForUndo() { undoSnapshot = JSON.parse(JSON.stringify(state)); }
+  function offerUndo(msg) {
+    const snapshot = undoSnapshot;
+    if (!snapshot) { showToast(msg); return; }
+    showToast(msg, {
+      label: t('undo'),
+      onClick: () => {
+        state = normalizeState(snapshot);
+        save();
+        flushRemoteWrite();
+        refreshAll();
+        showToast(t('undone'));
+      }
+    });
   }
 
   function getLang() { return state.settings.language === 'he' ? 'he' : 'en'; }
@@ -258,7 +338,7 @@
   }
 
   function calcShift(shift) {
-    const settings = state.settings;
+    const settings = ratesFor(shift);
     const { start, end } = shiftRange(shift);
     const totalHours = (end - start) / 3600000;
     const threshold = settings.overtimeThreshold || 0;
@@ -285,6 +365,30 @@
     const basePay = totalHours*settings.rate;
     const windowHours = baseWindowHours + otWindowHours;
     return { totalHours, windowHours, overtimeHours, pay, bonusPay: pay - basePay };
+  }
+
+  function rateSummary(r) {
+    let s = `${money(r.rate)} ${t('rsPerHour')} · ${t('rsWeekend')} ${r.weekendPercent}% · ${t('rsHoliday')} ${r.holidayPercent}%`;
+    if (r.overtimeThreshold > 0) s += ` · ${t('rsOvertime')} ${r.overtimePercent}% ${t('rsAfter').replace('{h}', r.overtimeThreshold)}`;
+    return s;
+  }
+
+  function rangesOverlap(a, b) { return a.start < b.end && b.start < a.end; }
+  function findClash(shift, ignoreId) {
+    const r = shiftRange(shift);
+    return state.shifts.find(o => o.id !== ignoreId && rangesOverlap(r, shiftRange(o)));
+  }
+  // Sweep over shifts sorted by start time; any shift starting before the latest end seen so far overlaps it.
+  function findOverlaps(list) {
+    const items = list.map(s => { const r = shiftRange(s); return { id: s.id, start: r.start.getTime(), end: r.end.getTime() }; })
+      .sort((a, b) => a.start - b.start);
+    const ids = new Set();
+    let maxEnd = -Infinity, maxId = null;
+    items.forEach(it => {
+      if (it.start < maxEnd) { ids.add(it.id); ids.add(maxId); }
+      if (it.end > maxEnd) { maxEnd = it.end; maxId = it.id; }
+    });
+    return ids;
   }
 
   function monthKey(dateStr) { return dateStr.slice(0,7); }
@@ -436,10 +540,11 @@
       $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList"><div class="empty-state"><div class="big">${ICON_CLOCK}</div>${t('emptyShifts')}</div></div>`;
       return;
     }
+    const overlapping = findOverlaps(state.shifts);
     const html = shifts.map(s => {
       const c = calcShift(s);
       const dname = formatDateDisplay(s.date);
-      let badges = '';
+      let badges = overlapping.has(s.id) ? `<span class="badge badge-overlap">${t('badgeOverlap')}</span>` : '';
       if (c.windowHours > 0) badges += `<span class="badge badge-weekend">${t('badgeWeekend')} ${fmt(c.windowHours)}h</span>`;
       if (s.isHoliday) badges += `<span class="badge badge-holiday">${t('badgeHoliday')}</span>`;
       if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${fmt(c.overtimeHours)}h</span>`;
@@ -556,6 +661,7 @@
     renderShifts();
     renderIncomes();
     renderGoals();
+    renderApplyRatesBtn();
   }
 
   // ---- static i18n ----
@@ -632,10 +738,11 @@
         return;
       }
       if (!confirm(t('confirmImport'))) return;
+      rememberForUndo();
       state = normalizeState(data);
       save();
       refreshAll();
-      alert(t('alertImportOk'));
+      offerUndo(t('alertImportOk'));
     };
     reader.onerror = () => alert(t('alertImportFail') + t('alertImportInvalid'));
     reader.readAsText(file);
@@ -664,18 +771,126 @@
     btn.addEventListener('click', () => {
       if (!matches()) return;
       const language = state.settings.language;
+      rememberForUndo();
       state = defaultState();
       state.settings.language = language;
       save();
       flushRemoteWrite();
       closeSheetOverlay();
       refreshAll();
-      showToast(t('eraseDone'));
+      offerUndo(t('eraseDone'));
     });
     openSheetOverlay();
   }
 
-  // ---- monthly shift report (.docx, generated in the browser without external libraries) ----
+  function monthLongLabel(m) {
+    return new Date(m + '-01T00:00:00').toLocaleDateString(getLang() === 'he' ? 'he-IL' : undefined, { month: 'long', year: 'numeric' });
+  }
+
+  // ---- rate history: apply today's rates to a whole month (e.g. a retroactive raise) ----
+  function renderApplyRatesBtn() {
+    $('applyRatesBtn').textContent = t('applyRatesBtn').replace('{m}', monthLongLabel(goalMonth()));
+  }
+  $('applyRatesBtn').addEventListener('click', () => {
+    const month = goalMonth();
+    const label = monthLongLabel(month);
+    const inMonth = state.shifts.filter(s => monthKey(s.date) === month);
+    if (!inMonth.length) { showToast(t('noShiftsInMonth').replace('{m}', label)); return; }
+    if (!confirm(t('confirmApplyRates').replace('{n}', inMonth.length).replace('{m}', label))) return;
+    rememberForUndo();
+    const id = ensureCurrentRateSet();
+    inMonth.forEach(s => { s.rateId = id; });
+    save();
+    refreshAll();
+    offerUndo(t('ratesApplied').replace('{n}', inMonth.length));
+  });
+
+  // ---- cloud backups: one snapshot per day, last BACKUP_KEEP_DAYS kept ----
+  const BACKUP_KEEP_DAYS = 14;
+  function dateStr(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function backupsRef(uid) { return db.collection('users').doc(uid).collection('backups'); }
+  function runDailyBackup(uid) {
+    const today = todayStr();
+    const flagKey = 'workTrackerBackup_' + uid;
+    try { if (localStorage.getItem(flagKey) === today) return; } catch(e) {}
+    if (!state.shifts.length && !state.incomes.length && !state.templates.length) return;
+    const col = backupsRef(uid);
+    col.doc(today).get().then(snap => {
+      const writes = [];
+      if (!snap.exists) writes.push(col.doc(today).set({ data: state, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
+      // Drop anything older than the retention window (covers a week of not opening the app).
+      for (let i = BACKUP_KEEP_DAYS; i < BACKUP_KEEP_DAYS + 7; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        writes.push(col.doc(dateStr(d)).delete());
+      }
+      return Promise.all(writes);
+    }).then(() => { try { localStorage.setItem(flagKey, today); } catch(e) {} })
+      .catch(err => console.warn('Daily backup skipped:', err && err.code));
+  }
+
+  function openRestoreSheet() {
+    if (!currentUser) return;
+    sheetMode = 'restore'; editingId = null;
+    $('sheetTitle').textContent = t('restoreTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreLoading'))}</div>`;
+    openSheetOverlay();
+    const uid = currentUser.uid;
+    backupsRef(uid).get().then(snap => {
+      if (sheetMode !== 'restore') return;
+      const docs = snap.docs.filter(d => isValidDate(d.id)).sort((a, b) => b.id.localeCompare(a.id));
+      docs.slice(BACKUP_KEEP_DAYS).forEach(d => d.ref.delete().catch(() => {}));
+      const kept = docs.slice(0, BACKUP_KEEP_DAYS);
+      if (!kept.length) {
+        $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreNone'))}</div>`;
+        return;
+      }
+      const locale = getLang() === 'he' ? 'he-IL' : undefined;
+      const labelFor = id => new Date(id + 'T00:00:00').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+      const entries = kept.map(d => ({ id: d.id, data: normalizeState((d.data() || {}).data) }));
+      $('sheetBody').innerHTML = `
+        <div class="section-footer" style="margin:0 4px 12px;">${escapeHtml(t('restoreHint'))}</div>
+        <div class="list-group">${entries.map(e => `
+          <div class="list-row picker-row" data-backup="${e.id}">
+            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', e.data.shifts.length).replace('{i}', e.data.incomes.length))}</span></div>
+            <span class="entry-chevron">›</span>
+          </div>`).join('')}</div>`;
+      $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
+        const entry = entries.find(e => e.id === row.dataset.backup);
+        const label = labelFor(entry.id);
+        if (!confirm(t('confirmRestore').replace('{d}', label))) return;
+        rememberForUndo();
+        state = entry.data;
+        save();
+        flushRemoteWrite();
+        closeSheetOverlay();
+        refreshAll();
+        offerUndo(t('restoreDone').replace('{d}', label));
+      }));
+    }).catch(err => {
+      console.error('Loading backups failed:', err);
+      if (sheetMode === 'restore') $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreFailed'))}</div>`;
+    });
+  }
+  $('restoreBtn').addEventListener('click', openRestoreSheet);
+
+  // ---- new month while the app was open or suspended ----
+  let lastSeenMonth = currentMonthStr();
+  function checkMonthRollover() {
+    const now = currentMonthStr();
+    if (now === lastSeenMonth) return;
+    const previous = lastSeenMonth;
+    lastSeenMonth = now;
+    if (lastSpecificMonth === previous) lastSpecificMonth = now;
+    if (monthFilter === previous) selectMonth(now);
+    else renderDataViews();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkMonthRollover(); });
+  window.addEventListener('pageshow', checkMonthRollover);
+  setInterval(checkMonthRollover, 60000);
+
+  // ---- monthly shift report (Word or PDF, generated in the browser without external libraries) ----
   const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const CRC_TABLE = (() => {
     const table = new Uint32Array(256);
@@ -774,75 +989,128 @@
     return `<w:tbl><w:tblPr><w:tblW w:w="${widths.reduce((a, b) => a + b, 0)}" w:type="dxa"/>${rtl ? '<w:jc w:val="right"/>' : ''}<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows}</w:tbl>`;
   }
 
-  function buildReportDocx(month) {
+  const REPORT_FORMAT_KEY = 'workTrackerReportFormat';
+  function getReportFormat() { try { return localStorage.getItem(REPORT_FORMAT_KEY) === 'pdf' ? 'pdf' : 'docx'; } catch(e) { return 'docx'; } }
+  function setReportFormat(f) { try { localStorage.setItem(REPORT_FORMAT_KEY, f); } catch(e) {} }
+
+  // One description of the report feeds both the Word and the PDF renderer, so they always match.
+  function buildReportModel(month) {
     const lang = getLang();
     const rtl = lang === 'he';
     const locale = rtl ? 'he-IL' : undefined;
-    const s = state.settings;
     const shifts = state.shifts.filter(x => monthKey(x.date) === month)
       .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
     const incomes = state.incomes.filter(x => monthKey(x.date) === month)
       .sort((a, b) => a.date.localeCompare(b.date));
-    const monthName = new Date(month + '-01T00:00:00').toLocaleDateString(locale, { month: 'long', year: 'numeric' });
     const dateFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' });
     const dayFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { weekday: 'long' });
     const dash = '–';
-    const HEAD = 'E8EEF7', TOTAL = 'F2F2F7';
-    const body = [];
-    const para = (text, o = {}) => body.push(wPara(wRun(text, o), { rtl, align: o.align, after: o.after }));
-
-    para(`${t('reportTitle')} ${dash} ${monthName}`, { bold: true, size: 18, after: 80 });
-    if (currentUser && currentUser.email) para(`${t('reportEmployee')}: ${currentUser.email}`, { after: 40 });
-    para(`${t('reportGenerated')}: ${new Date().toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })}`, { color: '6E6E73', after: 220 });
-
-    para(t('reportRates'), { bold: true, size: 12, after: 60 });
-    const overtime = s.overtimeThreshold > 0
-      ? t('reportOvertimeDesc').replace('{p}', s.overtimePercent).replace('{h}', s.overtimeThreshold)
-      : t('reportOvertimeOff');
-    [
-      [t('reportRate'), money(s.rate)],
-      [t('reportWeekend'), `${s.weekendPercent}% · ${DOW_FULL[lang][s.weekendStartDow]} ${s.weekendStartTime} ${dash} ${DOW_FULL[lang][s.weekendEndDow]} ${s.weekendEndTime}`],
-      [t('reportHoliday'), `${s.holidayPercent}%`],
-      [t('reportOvertime'), overtime]
-    ].forEach(([k, v]) => para(`${k}: ${v}`, { after: 20 }));
-    body.push(wPara('', { rtl, after: 200 }));
-
-    para(t('reportShifts'), { bold: true, size: 12, after: 80 });
-    // Landscape A4 usable width is 15398 twips; the note column takes what's left.
-    const sw = [1350, 1250, 850, 850, 950, 1150, 1150, 950, 1450, 5448];
-    let sumHours = 0, sumWeekend = 0, sumOvertime = 0, sumPay = 0;
-    let shiftRows = wRow([[t('colDate')], [t('colDay')], [t('colStart'), 'center'], [t('colEnd'), 'center'], [t('colHours'), 'right'], [t('colWeekend'), 'right'], [t('colOvertime'), 'right'], [t('colHoliday'), 'center'], [t('colPay'), 'right'], [t('colNote')]], sw, { rtl, header: true, bold: true, fill: HEAD });
+    const describe = r => {
+      const overtime = r.overtimeThreshold > 0
+        ? t('reportOvertimeDesc').replace('{p}', r.overtimePercent).replace('{h}', r.overtimeThreshold)
+        : t('reportOvertimeOff');
+      return [
+        `${t('reportRate')}: ${money(r.rate)}`,
+        `${t('reportWeekend')}: ${r.weekendPercent}% · ${DOW_FULL[lang][r.weekendStartDow]} ${r.weekendStartTime} ${dash} ${DOW_FULL[lang][r.weekendEndDow]} ${r.weekendEndTime}`,
+        `${t('reportHoliday')}: ${r.holidayPercent}%`,
+        `${t('reportOvertime')}: ${overtime}`
+      ];
+    };
+    // Usually one group per month; more than one when rates changed mid-month.
+    const groups = [];
     shifts.forEach(x => {
+      const r = ratesFor(x);
+      const key = rateKey(r);
+      let g = groups.find(gr => gr.key === key);
+      if (!g) { g = { key, rates: r, dates: [] }; groups.push(g); }
+      g.dates.push(x.date);
+    });
+    const rateBlocks = groups.map(g => ({
+      label: groups.length > 1
+        ? t('reportRatesFor').replace('{d}', g.dates.length === 1 ? dateFmt(g.dates[0]) : `${dateFmt(g.dates[0])} ${dash} ${dateFmt(g.dates[g.dates.length - 1])}`)
+        : null,
+      lines: describe(g.rates)
+    }));
+    if (!rateBlocks.length) rateBlocks.push({ label: null, lines: describe(currentRates()) });
+
+    let sumHours = 0, sumWeekend = 0, sumOvertime = 0, sumPay = 0;
+    const shiftRows = shifts.map(x => {
       const c = calcShift(x);
       sumHours += c.totalHours; sumWeekend += c.windowHours; sumOvertime += c.overtimeHours; sumPay += c.pay;
-      shiftRows += wRow([
-        [dateFmt(x.date)], [dayFmt(x.date)], [x.startTime, 'center'], [x.endTime, 'center'],
-        [fmt(c.totalHours), 'right'], [c.windowHours > 0 ? fmt(c.windowHours) : dash, 'right'],
-        [c.overtimeHours > 0 ? fmt(c.overtimeHours) : dash, 'right'], [x.isHoliday ? t('reportYes') : dash, 'center'],
-        [money(c.pay), 'right'], [x.note || '']
-      ], sw, { rtl });
+      return [
+        dateFmt(x.date), dayFmt(x.date), x.startTime, x.endTime, fmt(c.totalHours), money(ratesFor(x).rate),
+        c.windowHours > 0 ? fmt(c.windowHours) : dash, c.overtimeHours > 0 ? fmt(c.overtimeHours) : dash,
+        x.isHoliday ? t('reportYes') : dash, money(c.pay), x.note || ''
+      ];
     });
-    shiftRows += wRow([[t('reportTotal')], [''], [''], [''], [fmt(sumHours), 'right'], [fmt(sumWeekend), 'right'], [fmt(sumOvertime), 'right'], [''], [money(sumPay), 'right'], ['']], sw, { rtl, bold: true, fill: TOTAL });
-    body.push(wTable(sw, shiftRows, rtl));
-
+    // Widths are in Word twips; landscape A4 content width is 15398.
+    const tables = [{
+      title: t('reportShifts'),
+      cols: [
+        { label: t('colDate'), width: 1300 }, { label: t('colDay'), width: 1150 },
+        { label: t('colStart'), width: 800, align: 'center' }, { label: t('colEnd'), width: 800, align: 'center' },
+        { label: t('colHours'), width: 850, align: 'right' }, { label: t('colRate'), width: 1050, align: 'right' },
+        { label: t('colWeekend'), width: 1300, align: 'right' }, { label: t('colOvertime'), width: 1300, align: 'right' },
+        { label: t('colHoliday'), width: 850, align: 'center' }, { label: t('colPay'), width: 1400, align: 'right' },
+        { label: t('colNote'), width: 4598 }
+      ],
+      rows: shiftRows,
+      total: [t('reportTotal'), '', '', '', fmt(sumHours), '', fmt(sumWeekend), fmt(sumOvertime), '', money(sumPay), '']
+    }];
     let sumIncome = 0;
     if (incomes.length) {
-      body.push(wPara('', { rtl, after: 200 }));
-      para(t('reportOtherIncome'), { bold: true, size: 12, after: 80 });
-      const iw = [1600, 3600, 1800, 8398];
-      let incomeRows = wRow([[t('colDate')], [t('colCategory')], [t('colAmount'), 'right'], [t('colNote')]], iw, { rtl, header: true, bold: true, fill: HEAD });
-      incomes.forEach(x => {
+      const incomeRows = incomes.map(x => {
         sumIncome += x.amount;
-        incomeRows += wRow([[dateFmt(x.date)], [categoryLabel(x.category)], [money(x.amount), 'right'], [x.note || '']], iw, { rtl });
+        return [dateFmt(x.date), categoryLabel(x.category), money(x.amount), x.note || ''];
       });
-      incomeRows += wRow([[t('reportTotal')], [''], [money(sumIncome), 'right'], ['']], iw, { rtl, bold: true, fill: TOTAL });
-      body.push(wTable(iw, incomeRows, rtl));
+      tables.push({
+        title: t('reportOtherIncome'),
+        cols: [{ label: t('colDate'), width: 1600 }, { label: t('colCategory'), width: 3600 }, { label: t('colAmount'), width: 1800, align: 'right' }, { label: t('colNote'), width: 8398 }],
+        rows: incomeRows,
+        total: [t('reportTotal'), '', money(sumIncome), '']
+      });
     }
+    const meta = [];
+    if (currentUser && currentUser.email) meta.push({ text: `${t('reportEmployee')}: ${currentUser.email}` });
+    meta.push({ text: `${t('reportGenerated')}: ${new Date().toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })}`, muted: true });
+    return {
+      rtl,
+      title: `${t('reportTitle')} ${dash} ${monthLongLabel(month)}`,
+      meta,
+      ratesTitle: t('reportRates'),
+      rateBlocks,
+      tables,
+      summary: `${t('reportShiftCount')}: ${shifts.length}  ·  ${t('colHours')}: ${fmt(sumHours)}  ·  ${t('sumSubWork')}: ${money(sumPay)}${incomes.length ? `  ·  ${t('reportOtherIncome')}: ${money(sumIncome)}` : ''}`,
+      grandTotal: `${t('reportGrandTotal')}: ${money(sumPay + sumIncome)}`,
+      footer: t('reportFooter')
+    };
+  }
 
+  function renderReportDocx(m) {
+    const rtl = m.rtl;
+    const body = [];
+    const para = (text, o = {}) => body.push(wPara(wRun(text, o), { rtl, align: o.align, after: o.after }));
+    para(m.title, { bold: true, size: 18, after: 80 });
+    m.meta.forEach((x, i) => para(x.text, { color: x.muted ? '6E6E73' : undefined, after: i === m.meta.length - 1 ? 220 : 40 }));
+    para(m.ratesTitle, { bold: true, size: 12, after: 60 });
+    m.rateBlocks.forEach(b => {
+      if (b.label) para(b.label, { bold: true, after: 20 });
+      b.lines.forEach(line => para(line, { after: 20 }));
+      body.push(wPara('', { rtl, after: 80 }));
+    });
+    m.tables.forEach(tb => {
+      body.push(wPara('', { rtl, after: 120 }));
+      para(tb.title, { bold: true, size: 12, after: 80 });
+      const widths = tb.cols.map(c => c.width);
+      let rows = wRow(tb.cols.map(c => [c.label, c.align]), widths, { rtl, header: true, bold: true, fill: 'E8EEF7' });
+      tb.rows.forEach(r => { rows += wRow(r.map((v, i) => [v, tb.cols[i].align]), widths, { rtl }); });
+      rows += wRow(tb.total.map((v, i) => [v, tb.cols[i].align]), widths, { rtl, bold: true, fill: 'F2F2F7' });
+      body.push(wTable(widths, rows, rtl));
+    });
     body.push(wPara('', { rtl, after: 200 }));
-    para(`${t('reportShiftCount')}: ${shifts.length}  ·  ${t('colHours')}: ${fmt(sumHours)}  ·  ${t('sumSubWork')}: ${money(sumPay)}${incomes.length ? `  ·  ${t('reportOtherIncome')}: ${money(sumIncome)}` : ''}`, { after: 60 });
-    para(`${t('reportGrandTotal')}: ${money(sumPay + sumIncome)}`, { bold: true, size: 13, after: 240 });
-    para(t('reportFooter'), { size: 8, color: '8E8E93', after: 0 });
+    para(m.summary, { after: 60 });
+    para(m.grandTotal, { bold: true, size: 13, after: 240 });
+    para(m.footer, { size: 8, color: '8E8E93', after: 0 });
 
     const sect = `<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="360" w:footer="360" w:gutter="0"/>${rtl ? '<w:bidi/>' : ''}</w:sectPr>`;
     const xmlHead = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -853,45 +1121,235 @@
     ], DOCX_MIME);
   }
 
+  // PDF: each page is drawn on a canvas (so Hebrew and right-to-left text render exactly as in
+  // the app) and embedded as an image in a minimal hand-built PDF. No fonts or libraries needed,
+  // and the fixed layout is much harder to edit than a Word file.
+  const PDF_W = 842, PDF_H = 595, PDF_M = 36, PDF_SCALE = 2;
+  const PDF_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+  function renderReportPdf(m) {
+    const rtl = m.rtl;
+    const pages = [];
+    const contentW = PDF_W - 2 * PDF_M;
+    const bottom = PDF_H - PDF_M - 12;
+    let ctx, y;
+    const newPage = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = PDF_W * PDF_SCALE;
+      canvas.height = PDF_H * PDF_SCALE;
+      ctx = canvas.getContext('2d');
+      ctx.scale(PDF_SCALE, PDF_SCALE);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, PDF_W, PDF_H);
+      ctx.direction = rtl ? 'rtl' : 'ltr';
+      ctx.textBaseline = 'middle';
+      pages.push({ canvas, ctx });
+      y = PDF_M;
+    };
+    const setFont = (size, bold) => { ctx.font = `${bold ? 700 : 400} ${size}px ${PDF_FONT}`; };
+    const ellipsize = (s, maxW) => {
+      if (ctx.measureText(s).width <= maxW) return s;
+      let cut = s;
+      while (cut.length && ctx.measureText(cut + '…').width > maxW) cut = cut.slice(0, -1);
+      return cut + '…';
+    };
+    const wrap = (s, maxW) => {
+      const lines = [];
+      let cur = '';
+      String(s).split(' ').forEach(word => {
+        const next = cur ? cur + ' ' + word : word;
+        if (cur && ctx.measureText(next).width > maxW) { lines.push(cur); cur = word; } else cur = next;
+      });
+      if (cur) lines.push(cur);
+      return lines.length ? lines : [''];
+    };
+    const text = (s, o = {}) => {
+      const size = o.size || 10;
+      const lh = size * 1.45;
+      setFont(size, o.bold);
+      wrap(s, contentW).forEach(line => {
+        if (y + lh > bottom) { newPage(); setFont(size, o.bold); }
+        ctx.fillStyle = o.color || '#000000';
+        ctx.textAlign = rtl ? 'right' : 'left';
+        ctx.fillText(line, rtl ? PDF_W - PDF_M : PDF_M, y + lh / 2);
+        y += lh;
+      });
+      y += o.after || 0;
+    };
+    const table = tb => {
+      const sum = tb.cols.reduce((a, c) => a + c.width, 0);
+      const widths = tb.cols.map(c => c.width / sum * contentW);
+      const lefts = [];
+      let acc = 0;
+      widths.forEach(w => { lefts.push(rtl ? PDF_W - PDF_M - acc - w : PDF_M + acc); acc += w; });
+      const HEAD_H = 20, ROW_H = 18;
+      const header = tb.cols.map(c => c.label);
+      const row = (cells, o = {}) => {
+        const h = o.header ? HEAD_H : ROW_H;
+        if (o.fill) { ctx.fillStyle = o.fill; ctx.fillRect(PDF_M, y, contentW, h); }
+        setFont(8.5, o.bold);
+        ctx.fillStyle = '#000000';
+        cells.forEach((v, i) => {
+          const align = tb.cols[i].align || 'left';
+          const x0 = lefts[i], x1 = x0 + widths[i], pad = 4;
+          let x;
+          if (align === 'center') { ctx.textAlign = 'center'; x = (x0 + x1) / 2; }
+          else if ((align === 'left') !== rtl) { ctx.textAlign = 'left'; x = x0 + pad; }
+          else { ctx.textAlign = 'right'; x = x1 - pad; }
+          ctx.fillText(ellipsize(String(v), widths[i] - 2 * pad), x, y + h / 2 + 0.5);
+        });
+        ctx.strokeStyle = '#C8C8CC';
+        ctx.lineWidth = 0.6;
+        ctx.strokeRect(PDF_M, y, contentW, h);
+        lefts.forEach(x0 => { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0, y + h); ctx.stroke(); });
+        y += h;
+      };
+      const headerRow = () => row(header, { header: true, bold: true, fill: '#E8EEF7' });
+      headerRow();
+      tb.rows.forEach(r => {
+        if (y + ROW_H > bottom) { newPage(); headerRow(); }
+        row(r);
+      });
+      if (y + ROW_H > bottom) { newPage(); headerRow(); }
+      row(tb.total, { bold: true, fill: '#F2F2F7' });
+    };
+
+    newPage();
+    text(m.title, { size: 18, bold: true, after: 4 });
+    m.meta.forEach(x => text(x.text, { size: 10, color: x.muted ? '#6E6E73' : '#000000' }));
+    y += 12;
+    text(m.ratesTitle, { size: 12, bold: true, after: 2 });
+    m.rateBlocks.forEach(b => {
+      if (b.label) text(b.label, { size: 10, bold: true });
+      b.lines.forEach(line => text(line, { size: 10 }));
+      y += 4;
+    });
+    m.tables.forEach(tb => {
+      y += 10;
+      if (y + 17 + 38 > bottom) newPage();
+      text(tb.title, { size: 12, bold: true, after: 4 });
+      table(tb);
+    });
+    y += 16;
+    text(m.summary, { size: 10, after: 2 });
+    text(m.grandTotal, { size: 13, bold: true });
+
+    // Page footer on every page: the note on the start side, page number on the end side.
+    pages.forEach((p, i) => {
+      const fy = PDF_H - PDF_M / 2;
+      p.ctx.font = `400 8px ${PDF_FONT}`;
+      p.ctx.fillStyle = '#8E8E93';
+      p.ctx.textAlign = rtl ? 'right' : 'left';
+      p.ctx.fillText(m.footer, rtl ? PDF_W - PDF_M : PDF_M, fy);
+      p.ctx.textAlign = rtl ? 'left' : 'right';
+      p.ctx.fillText(t('reportPage').replace('{p}', i + 1).replace('{n}', pages.length), rtl ? PDF_M : PDF_W - PDF_M, fy);
+    });
+    // toDataURL is synchronous, which keeps the iPhone Share sheet inside the user's tap.
+    const images = pages.map(p => dataUrlToBytes(p.canvas.toDataURL('image/jpeg', 0.92)));
+    return buildPdf(images, PDF_W * PDF_SCALE, PDF_H * PDF_SCALE, m.title);
+  }
+
+  function dataUrlToBytes(url) {
+    const bin = atob(url.slice(url.indexOf(',') + 1));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function buildPdf(images, pxW, pxH, title) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const offsets = [];
+    let pos = 0;
+    const put = x => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); pos += b.length; };
+    const obj = (id, body) => { offsets[id] = pos; put(`${id} 0 obj\n${body}\nendobj\n`); };
+    const utf16Hex = s => '<FEFF' + Array.from(s).map(ch => {
+      const c = ch.codePointAt(0);
+      if (c > 0xFFFF) { const v = c - 0x10000; return ((0xD800 + (v >> 10)).toString(16) + (0xDC00 + (v & 0x3FF)).toString(16)).toUpperCase(); }
+      return c.toString(16).padStart(4, '0').toUpperCase();
+    }).join('') + '>';
+    const count = images.length;
+    const lastId = 3 + count * 3;
+    put('%PDF-1.4\n%âãÏÓ\n');
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    obj(2, `<< /Type /Pages /Kids [${images.map((_, i) => `${4 + i * 3} 0 R`).join(' ')}] /Count ${count} >>`);
+    obj(3, `<< /Title ${utf16Hex(title)} /Producer (Work & Pay) >>`);
+    images.forEach((img, i) => {
+      const pageId = 4 + i * 3, contentId = pageId + 1, imageId = pageId + 2;
+      obj(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_W} ${PDF_H}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+      const content = `q\n${PDF_W} 0 0 ${PDF_H} 0 0 cm\n/Im0 Do\nQ\n`;
+      obj(contentId, `<< /Length ${content.length} >>\nstream\n${content}endstream`);
+      offsets[imageId] = pos;
+      put(`${imageId} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${pxW} /Height ${pxH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.length} >>\nstream\n`);
+      put(img);
+      put('\nendstream\nendobj\n');
+    });
+    const xrefPos = pos;
+    let xref = `xref\n0 ${lastId + 1}\n0000000000 65535 f \n`;
+    for (let id = 1; id <= lastId; id++) xref += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+    put(`${xref}trailer\n<< /Size ${lastId + 1} /Root 1 0 R /Info 3 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`);
+    return new Blob(parts, { type: 'application/pdf' });
+  }
+
   function openReportSheet() {
     sheetMode = 'report'; editingId = null;
     $('sheetTitle').textContent = t('reportSheetTitle');
     $('sheetSave').style.visibility = 'hidden';
-    const locale = getLang() === 'he' ? 'he-IL' : undefined;
     const months = Array.from(new Set(state.shifts.map(x => monthKey(x.date)))).sort().reverse();
     if (!months.length) {
       $('sheetBody').innerHTML = `<div class="empty-state"><div class="big">${ICON_CLOCK}</div>${escapeHtml(t('reportNoShifts'))}</div>`;
-    } else {
-      $('sheetBody').innerHTML = `
-        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('reportPickMonth'))}</div>
-        <div class="list-group">${months.map(m => {
-          const list = state.shifts.filter(x => monthKey(x.date) === m);
-          const pay = list.reduce((sum, x) => sum + calcShift(x).pay, 0);
-          const label = new Date(m + '-01T00:00:00').toLocaleDateString(locale, { month: 'long', year: 'numeric' });
-          return `<div class="list-row picker-row" data-report-month="${m}">
-            <div class="rlabel">${escapeHtml(label)}<span class="rsub">${escapeHtml(t('reportShiftsCount').replace('{n}', list.length))} · ${escapeHtml(money(pay))}</span></div>
-            <span class="entry-chevron">›</span>
-          </div>`;
-        }).join('')}</div>
-        <div class="section-footer">${escapeHtml(t('reportHint'))}</div>`;
-      $('sheetBody').querySelectorAll('[data-report-month]').forEach(row => {
-        row.addEventListener('click', () => exportReport(row.dataset.reportMonth));
-      });
+      openSheetOverlay();
+      return;
     }
+    let format = getReportFormat();
+    $('sheetBody').innerHTML = `
+      <div class="list-group">
+        <div class="list-row">
+          <div class="rlabel">${escapeHtml(t('reportFormat'))}</div>
+          <div class="seg-toggle" id="reportFormatToggle">
+            <button type="button" class="seg-btn" data-fmt="docx">Word</button>
+            <button type="button" class="seg-btn" data-fmt="pdf">PDF</button>
+          </div>
+        </div>
+      </div>
+      <div class="section-footer" id="reportFormatHint" style="margin:8px 6px 18px;"></div>
+      <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('reportPickMonth'))}</div>
+      <div class="list-group">${months.map(mo => {
+        const list = state.shifts.filter(x => monthKey(x.date) === mo);
+        const pay = list.reduce((sum, x) => sum + calcShift(x).pay, 0);
+        return `<div class="list-row picker-row" data-report-month="${mo}">
+          <div class="rlabel">${escapeHtml(monthLongLabel(mo))}<span class="rsub">${escapeHtml(t('reportShiftsCount').replace('{n}', list.length))} · ${escapeHtml(money(pay))}</span></div>
+          <span class="entry-chevron">›</span>
+        </div>`;
+      }).join('')}</div>`;
+    const syncFormat = () => {
+      $('reportFormatToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.fmt === format));
+      $('reportFormatHint').textContent = t(format === 'pdf' ? 'reportHintPdf' : 'reportHintDocx');
+    };
+    $('reportFormatToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
+      format = b.dataset.fmt;
+      setReportFormat(format);
+      syncFormat();
+    }));
+    syncFormat();
+    $('sheetBody').querySelectorAll('[data-report-month]').forEach(row => {
+      row.addEventListener('click', () => exportReport(row.dataset.reportMonth, format));
+    });
     openSheetOverlay();
   }
 
-  function exportReport(month) {
+  function exportReport(month, format) {
     let blob;
     try {
-      blob = buildReportDocx(month);
+      const model = buildReportModel(month);
+      blob = format === 'pdf' ? renderReportPdf(model) : renderReportDocx(model);
     } catch (err) {
       console.error('Report failed:', err);
       showToast(t('reportExportFailed'));
       return;
     }
     closeSheetOverlay();
-    deliverFile(blob, `Shift-Report-${month}.docx`);
+    deliverFile(blob, `Shift-Report-${month}.${format === 'pdf' ? 'pdf' : 'docx'}`);
   }
   $('reportBtn').addEventListener('click', openReportSheet);
 
@@ -1227,7 +1685,8 @@
     formShift = {
       date: shift ? shift.date : todayStr(),
       startTime: shift ? shift.startTime : defaultStart,
-      endTime: shift ? shift.endTime : addHoursToTime(defaultStart, 8)
+      endTime: shift ? shift.endTime : addHoursToTime(defaultStart, 8),
+      rateId: shift ? shift.rateId : null
     };
     $('sheetTitle').textContent = shift ? t('sheetEditShift') : t('sheetNewShift');
     $('sheetBody').innerHTML = `
@@ -1273,8 +1732,16 @@
       <div class="field-group">
         <div class="list-group">
           <div class="list-row">
-            <div class="rlabel" data-i18n="fieldHoliday">Holiday<span class="rsub" data-i18n="fieldHolidaySub">Applies the holiday bonus %</span></div>
+            <div class="rlabel"><span data-i18n="fieldHoliday">Holiday</span><span class="rsub" data-i18n="fieldHolidaySub">Applies the holiday bonus %</span></div>
             <label class="switch"><input type="checkbox" id="fHoliday" ${shift && shift.isHoliday ? 'checked' : ''}><span class="track"></span><span class="thumb"></span></label>
+          </div>
+        </div>
+      </div>
+      <div class="field-group">
+        <div class="list-group">
+          <div class="list-row">
+            <div class="rlabel"><span data-i18n="fieldRates">Pay rates</span><span class="rsub" id="valShiftRates"></span></div>
+            <button type="button" class="small-btn hidden" id="fUseCurrentRates" data-i18n="useCurrentRates">Use current rates</button>
           </div>
         </div>
       </div>
@@ -1291,6 +1758,15 @@
     initTimePicker($('panelShiftEnd'), formShift.endTime, v => { formShift.endTime = v; $('valShiftEnd').textContent = v; });
     renderShiftTemplateChips();
     setupPickerToggles($('sheetBody'));
+    // New shifts always use today's rates; an existing shift keeps its own unless the user switches it.
+    const showRates = () => {
+      const stored = formShift.rateId && state.rateSets.find(x => x.id === formShift.rateId);
+      const r = stored || currentRates();
+      $('valShiftRates').textContent = rateSummary(r);
+      $('fUseCurrentRates').classList.toggle('hidden', !stored || rateKey(stored) === rateKey(currentRates()));
+    };
+    showRates();
+    $('fUseCurrentRates').addEventListener('click', () => { formShift.rateId = null; showRates(); });
     if (shift) $('fDelete').addEventListener('click', () => {
       if (!confirm(t('confirmDeleteShift'))) return;
       deleteShift(id);
@@ -1363,11 +1839,15 @@
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
       if (formShift.startTime === formShift.endTime) { alert(t('alertSameTimes')); return; }
       if (!editingId && state.shifts.length >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+      const clash = findClash(formShift, editingId);
+      if (clash && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(clash.date)).replace('{t}', `${clash.startTime}–${clash.endTime}`))) return;
+      const keepRate = formShift.rateId && state.rateSets.some(r => r.id === formShift.rateId);
       const shiftObj = {
         id: editingId || genId(),
         date: formShift.date, startTime: formShift.startTime, endTime: formShift.endTime,
         isHoliday: $('fHoliday').checked,
-        note: $('fNote').value.trim().slice(0, LIMITS.note)
+        note: $('fNote').value.trim().slice(0, LIMITS.note),
+        rateId: keepRate ? formShift.rateId : ensureCurrentRateSet()
       };
       if (editingId) {
         const idx = state.shifts.findIndex(s => s.id === editingId);
@@ -1567,6 +2047,105 @@
       .then(() => location.reload());
   });
 
+  // Password changes and account deletion both require the current password again.
+  function reauthenticate(password) {
+    const user = auth.currentUser;
+    if (!user || !user.email) return Promise.reject({ code: 'auth/no-current-user' });
+    return user.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(user.email, password));
+  }
+
+  function openChangePasswordSheet() {
+    if (!auth.currentUser) return;
+    sheetMode = 'account'; editingId = null;
+    $('sheetTitle').textContent = t('changePwTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `
+      <form id="pwForm" novalidate>
+        <input type="email" autocomplete="username" value="${escapeHtml(auth.currentUser.email || '')}" hidden>
+        <div class="list-group">
+          <label class="auth-field"><input type="password" id="pwCurrent" autocomplete="current-password" maxlength="128" placeholder="${escapeHtml(t('pwCurrent'))}"></label>
+          <label class="auth-field"><input type="password" id="pwNew" autocomplete="new-password" maxlength="128" placeholder="${escapeHtml(t('pwNew'))}"></label>
+          <label class="auth-field"><input type="password" id="pwConfirm" autocomplete="new-password" maxlength="128" placeholder="${escapeHtml(t('pwConfirm'))}"></label>
+        </div>
+        <div class="section-footer">${escapeHtml(t('authErrPasswordRules'))}</div>
+        <div class="auth-error" id="pwMsg"></div>
+        <button type="submit" class="btn-accent btn-block" id="pwSaveBtn">${escapeHtml(t('changePwBtn'))}</button>
+      </form>`;
+    $('pwForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const current = $('pwCurrent').value, next = $('pwNew').value, again = $('pwConfirm').value;
+      const msg = text => { $('pwMsg').textContent = text; };
+      if (!current || !next || !again) return msg(t('pwFill'));
+      if (!isStrongPassword(next)) return msg(t('authErrPasswordRules'));
+      if (next !== again) return msg(t('pwMismatch'));
+      if (next === current) return msg(t('pwSame'));
+      msg('');
+      $('pwSaveBtn').disabled = true;
+      reauthenticate(current)
+        .then(() => auth.currentUser.updatePassword(next))
+        .then(() => { closeSheetOverlay(); showToast(t('pwChanged')); })
+        .catch(err => { msg(authErrorMessage(err)); $('pwSaveBtn').disabled = false; });
+    });
+    openSheetOverlay();
+  }
+  $('changePwBtn').addEventListener('click', openChangePasswordSheet);
+
+  function openDeleteAccountSheet() {
+    if (!auth.currentUser) return;
+    sheetMode = 'account'; editingId = null;
+    const word = t('eraseWord');
+    $('sheetTitle').textContent = t('deleteAccTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `
+      <div class="erase-warning"><strong>${escapeHtml(t('deleteAccWarnTitle'))}</strong>${escapeHtml(t('deleteAccWarnBody'))}</div>
+      <form id="delForm" novalidate>
+        <input type="email" autocomplete="username" value="${escapeHtml(auth.currentUser.email || '')}" hidden>
+        <div class="field-group">
+          <div class="list-group"><label class="auth-field"><input type="password" id="delPassword" autocomplete="current-password" maxlength="128" placeholder="${escapeHtml(t('deleteAccPassword'))}"></label></div>
+        </div>
+        <div class="field-group">
+          <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('eraseTypeLabel').replace('{w}', word))}</div>
+          <div class="list-group"><label class="auth-field"><input type="text" id="delConfirm" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${escapeHtml(word)}"></label></div>
+        </div>
+        <div class="auth-error" id="delMsg"></div>
+        <button type="submit" class="btn-danger btn-block" id="delBtn" disabled>${escapeHtml(t('deleteAccBtn'))}</button>
+      </form>`;
+    const ready = () => $('delPassword').value.length > 0 && $('delConfirm').value.trim().toUpperCase() === word.toUpperCase();
+    ['delPassword', 'delConfirm'].forEach(id => $(id).addEventListener('input', () => { $('delBtn').disabled = !ready(); }));
+    $('delForm').addEventListener('submit', e => {
+      e.preventDefault();
+      if (!ready()) return;
+      $('delBtn').disabled = true;
+      $('delMsg').textContent = '';
+      const user = auth.currentUser;
+      const uid = user.uid;
+      reauthenticate($('delPassword').value)
+        .then(() => {
+          // Stop syncing first so nothing re-creates the data while it's being removed.
+          if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
+          clearTimeout(writeTimer);
+          writeTimer = null;
+          remoteReady = false;
+          return backupsRef(uid).get().then(snap => Promise.all(snap.docs.map(d => d.ref.delete())));
+        })
+        .then(() => db.collection('users').doc(uid).delete())
+        .then(() => user.delete())
+        .then(() => {
+          clearLocalCache();
+          try { localStorage.removeItem(REMEMBER_KEY); localStorage.removeItem('workTrackerBackup_' + uid); } catch(e) {}
+          return db.terminate().then(() => db.clearPersistence()).catch(() => {});
+        })
+        .then(() => location.reload())
+        .catch(err => {
+          console.error('Account deletion failed:', err);
+          $('delMsg').textContent = authErrorMessage(err);
+          $('delBtn').disabled = !ready();
+        });
+    });
+    openSheetOverlay();
+  }
+  $('deleteAccountBtn').addEventListener('click', openDeleteAccountSheet);
+
   function applyRemoteState(data) {
     const incoming = normalizeState(data);
     if (JSON.stringify(incoming) === JSON.stringify(state)) return;
@@ -1603,14 +2182,16 @@
     const localIsMine = !owner || owner === user.uid;
     if (!localIsMine) { state = defaultState(); refreshAll(); }
     let firstSnapshot = true;
+    let backupChecked = false;
     firestoreUnsub = docRef.onSnapshot(snap => {
       if (firstSnapshot) { firstSnapshot = false; hideAuthScreen(); }
       if (snap.exists) {
         remoteReady = true;
         // Ignore echoes of our own unconfirmed writes and anything arriving while a
         // local change is still waiting to be sent, so edits are never overwritten.
-        if (snap.metadata.hasPendingWrites || writeTimer) return;
-        applyRemoteState(snap.data());
+        if (!snap.metadata.hasPendingWrites && !writeTimer) applyRemoteState(snap.data());
+        // The day's backup is taken from server-confirmed data, before today's edits.
+        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid); }
       } else if (!snap.metadata.fromCache) {
         // New account: seed it with this device's data only if that data belongs to this user.
         remoteReady = true;

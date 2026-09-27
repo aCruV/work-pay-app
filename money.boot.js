@@ -15,6 +15,12 @@
       }
     }
   } catch (e) {}
+  // Offline support (see sw.js). Only on real web addresses, not when opened as a local file.
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (err) { console.warn('Offline support unavailable:', err); });
+    });
+  }
   // Failsafe: even if the app script fails to load, never leave the launch screen up forever.
   setTimeout(function () {
     var s = document.getElementById('splash');

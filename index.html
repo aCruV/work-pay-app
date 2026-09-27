@@ -118,6 +118,12 @@
   .badge-weekend { background: rgba(0,122,255,0.12); color: var(--accent); }
   .badge-holiday { background: rgba(255,59,48,0.12); color: var(--red); }
   .badge-overtime { background: rgba(255,149,0,0.12); color: var(--amber); }
+  .badge-overlap { background: var(--red); color: #fff; }
+  .small-btn { flex: none; border: none; background: var(--track-off); color: var(--accent); font-size: 13px; font-weight: 600; padding: 7px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .small-btn.hidden { display: none; }
+  .toast.has-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
+  .toast.show.has-action { pointer-events: auto; }
+  .toast-action { flex: none; background: none; border: none; color: #4da3ff; font-size: 14px; font-weight: 700; padding: 4px 2px; cursor: pointer; }
   .entry-amount { text-align: end; font-weight: 800; font-size: 15px; white-space: nowrap; }
   .entry-chevron { color: var(--muted); font-size: 18px; }
   [dir="rtl"] .entry-chevron { transform: scaleX(-1); display: inline-block; }
@@ -358,7 +364,11 @@
       <div class="list-group">
         <div class="list-row"><div class="rlabel" data-i18n="rowSignedInAs">Signed in as</div><div class="picker-value" id="accountEmail"></div></div>
       </div>
-      <button class="btn-danger btn-block" id="signOutBtn" style="margin-top:10px;" data-i18n="btnSignOut">Sign Out</button>
+      <div class="btn-stack" style="margin-top:10px;">
+        <button type="button" class="btn-plain btn-block" id="changePwBtn" data-i18n="btnChangePassword">Change password</button>
+        <button type="button" class="btn-plain btn-block" id="signOutBtn" data-i18n="btnSignOut">Sign Out</button>
+        <button type="button" class="btn-danger btn-block" id="deleteAccountBtn" data-i18n="btnDeleteAccount">Delete account</button>
+      </div>
 
       <div class="section-header" data-i18n="sectionLanguage">Language</div>
       <div class="list-group">
@@ -469,6 +479,10 @@
       </div>
       <div class="section-footer" data-i18n="footerOvertime">Hours worked beyond the threshold in a single shift are paid at this percentage instead of 100%.</div>
 
+      <div class="section-header" data-i18n="sectionRateHistory">Rate changes</div>
+      <button type="button" class="btn-plain btn-block" id="applyRatesBtn">Apply current rates</button>
+      <div class="section-footer" data-i18n="footerRateHistory">Rate and bonus changes apply to shifts you add from now on.</div>
+
       <div class="section-header" data-i18n="sectionTemplates">Shift Templates</div>
       <div class="list-group" id="templatesSettingsList"></div>
       <button type="button" class="btn-plain btn-block" id="addTemplateBtn" style="margin-top:10px;">+ <span data-i18n="templateAddNew">New Template</span></button>
@@ -482,6 +496,7 @@
           <span data-i18n="btnImport">Import backup</span>
           <input type="file" id="importInput" accept="application/json,.json" hidden>
         </label>
+        <button type="button" class="btn-plain btn-block" id="restoreBtn" data-i18n="btnRestore">Restore from cloud backup</button>
         <button type="button" class="btn-danger btn-block" id="resetBtn" data-i18n="btnErase">Erase all data</button>
       </div>
       <div class="section-footer" data-i18n="footerData">Export saves a copy of all your data to a file. Import replaces your current data with a saved copy.</div>
