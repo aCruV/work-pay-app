@@ -661,7 +661,7 @@
     renderShifts();
     renderIncomes();
     renderGoals();
-    renderApplyRatesBtn();
+    renderApplyRatesList();
   }
 
   // ---- static i18n ----
@@ -787,23 +787,56 @@
     return new Date(m + '-01T00:00:00').toLocaleDateString(getLang() === 'he' ? 'he-IL' : undefined, { month: 'long', year: 'numeric' });
   }
 
-  // ---- rate history: apply today's rates to a whole month (e.g. a retroactive raise) ----
-  function renderApplyRatesBtn() {
-    $('applyRatesBtn').textContent = t('applyRatesBtn').replace('{m}', monthLongLabel(goalMonth()));
+  // ---- rate history: apply today's rates to past months (e.g. a retroactive raise) ----
+  // Lists only months that still have shifts on older rates; beyond RATES_LIST_VISIBLE the
+  // rest fold away behind a "Show more" row so the list never floods the screen.
+  const RATES_LIST_VISIBLE = 2;
+  let ratesListExpanded = false;
+  function outdatedShiftsByMonth() {
+    const current = rateKey(currentRates());
+    const byMonth = new Map();
+    state.shifts.forEach(s => {
+      if (rateKey(ratesFor(s)) === current) return;
+      const m = monthKey(s.date);
+      byMonth.set(m, (byMonth.get(m) || []).concat(s));
+    });
+    return Array.from(byMonth.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }
-  $('applyRatesBtn').addEventListener('click', () => {
-    const month = goalMonth();
-    const label = monthLongLabel(month);
-    const inMonth = state.shifts.filter(s => monthKey(s.date) === month);
-    if (!inMonth.length) { showToast(t('noShiftsInMonth').replace('{m}', label)); return; }
-    if (!confirm(t('confirmApplyRates').replace('{n}', inMonth.length).replace('{m}', label))) return;
+  function renderApplyRatesList() {
+    const el = $('applyRatesList');
+    const months = outdatedShiftsByMonth();
+    if (!months.length) {
+      ratesListExpanded = false;
+      el.innerHTML = `<div class="list-row"><div class="rlabel" style="color:var(--muted);">${escapeHtml(t('ratesAllCurrent'))}</div></div>`;
+      return;
+    }
+    const hidden = Math.max(0, months.length - RATES_LIST_VISIBLE);
+    const shown = ratesListExpanded ? months : months.slice(0, RATES_LIST_VISIBLE);
+    el.innerHTML = shown.map(([m, list]) => `
+      <div class="list-row picker-row" data-rates-month="${m}">
+        <div class="rlabel">${escapeHtml(monthLongLabel(m))}<span class="rsub">${escapeHtml(t('ratesListCount').replace('{n}', list.length))}</span></div>
+        <span class="entry-chevron">›</span>
+      </div>`).join('') + (hidden ? `
+      <div class="list-row picker-row rates-toggle" id="ratesListToggle">
+        <div class="rlabel" style="color:var(--accent);">${escapeHtml(ratesListExpanded ? t('ratesShowLess') : t('ratesShowMore').replace('{n}', hidden))}</div>
+        <span class="chev">${ratesListExpanded ? '⌃' : '⌄'}</span>
+      </div>` : '');
+    el.querySelectorAll('[data-rates-month]').forEach(row => row.addEventListener('click', () => applyCurrentRatesToMonth(row.dataset.ratesMonth)));
+    if (hidden) $('ratesListToggle').addEventListener('click', () => { ratesListExpanded = !ratesListExpanded; renderApplyRatesList(); });
+  }
+  function applyCurrentRatesToMonth(month) {
+    const entry = outdatedShiftsByMonth().find(([m]) => m === month);
+    if (!entry) return;
+    const shifts = entry[1];
+    if (!confirm(t('confirmApplyRates').replace('{n}', shifts.length).replace('{m}', monthLongLabel(month)))) return;
     rememberForUndo();
     const id = ensureCurrentRateSet();
-    inMonth.forEach(s => { s.rateId = id; });
+    const ids = new Set(shifts.map(s => s.id));
+    state.shifts.forEach(s => { if (ids.has(s.id)) s.rateId = id; });
     save();
     refreshAll();
-    offerUndo(t('ratesApplied').replace('{n}', inMonth.length));
-  });
+    offerUndo(t('ratesApplied').replace('{n}', shifts.length));
+  }
 
   // ---- cloud backups: one snapshot per day, last BACKUP_KEEP_DAYS kept ----
   const BACKUP_KEEP_DAYS = 14;
