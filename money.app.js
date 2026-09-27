@@ -186,7 +186,16 @@
       const oldRaw = localStorage.getItem(OLD_KEY);
       if (oldRaw) return normalizeState(migrateFromV1(JSON.parse(oldRaw)));
     } catch(e) {}
-    return defaultState();
+    return freshState();
+  }
+
+  // The last language used on this device, kept separately from the data so the sign-in
+  // screen still speaks it after signing out (which wipes the data from the device).
+  const UI_LANG_KEY = 'workTrackerUiLang';
+  function freshState() {
+    const s = defaultState();
+    try { if (localStorage.getItem(UI_LANG_KEY) === 'he') s.settings.language = 'he'; } catch(e) {}
+    return s;
   }
 
   // OWNER_KEY records which account the local cache belongs to, so one person's
@@ -1306,7 +1315,7 @@
     put('%PDF-1.4\n%âãÏÓ\n');
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     obj(2, `<< /Type /Pages /Kids [${images.map((_, i) => `${4 + i * 3} 0 R`).join(' ')}] /Count ${count} >>`);
-    obj(3, `<< /Title ${utf16Hex(title)} /Producer (Work & Pay) >>`);
+    obj(3, `<< /Title ${utf16Hex(title)} /Producer (Shifts Tracker) >>`);
     images.forEach((img, i) => {
       const pageId = 4 + i * 3, contentId = pageId + 1, imageId = pageId + 2;
       obj(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_W} ${PDF_H}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
@@ -1583,6 +1592,8 @@
     relabelWheelColumn($('wkEndDayCol'), DOW_FULL[lang]);
     updateSettingsPickerValues();
     $('languageToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
+    $('authLangToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === lang));
+    try { localStorage.setItem(UI_LANG_KEY, lang); } catch(e) {}
     renderDataViews();
     renderTemplatesSettings();
   }
@@ -2020,6 +2031,18 @@
   ['authEmail','authPassword'].forEach(id => $(id).addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); $('authSubmitBtn').click(); }
   }));
+  // A language picked on the sign-in screen is applied to the account once it loads,
+  // so signing in doesn't flip the app back to the account's previous language.
+  let pendingAuthLang = null;
+  $('authLangToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
+    if (state.settings.language === b.dataset.lang) return;
+    state.settings.language = b.dataset.lang;
+    pendingAuthLang = b.dataset.lang;
+    save();
+    applyLanguage();
+    updateAuthUI();
+  }));
+
   $('authToggleBtn').addEventListener('click', () => {
     authMode = authMode === 'signin' ? 'signup' : 'signin';
     updateAuthUI();
@@ -2213,7 +2236,7 @@
     const docRef = db.collection('users').doc(user.uid);
     const owner = getCacheOwner();
     const localIsMine = !owner || owner === user.uid;
-    if (!localIsMine) { state = defaultState(); refreshAll(); }
+    if (!localIsMine) { state = freshState(); refreshAll(); }
     let firstSnapshot = true;
     let backupChecked = false;
     firestoreUnsub = docRef.onSnapshot(snap => {
@@ -2223,11 +2246,17 @@
         // Ignore echoes of our own unconfirmed writes and anything arriving while a
         // local change is still waiting to be sent, so edits are never overwritten.
         if (!snap.metadata.hasPendingWrites && !writeTimer) applyRemoteState(snap.data());
+        if (pendingAuthLang && !snap.metadata.fromCache) {
+          const lang = pendingAuthLang;
+          pendingAuthLang = null;
+          if (state.settings.language !== lang) { state.settings.language = lang; save(); refreshAll(); }
+        }
         // The day's backup is taken from server-confirmed data, before today's edits.
         if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid); }
       } else if (!snap.metadata.fromCache) {
         // New account: seed it with this device's data only if that data belongs to this user.
         remoteReady = true;
+        pendingAuthLang = null;
         saveLocal();
         flushRemoteWrite();
       }
@@ -2262,7 +2291,7 @@
         writeTimer = null;
         // A cache stamped with an account that's no longer signed in (e.g. "Remember me"
         // was off) is private data, so it's removed rather than left on the device.
-        if (getCacheOwner()) { clearLocalCache(); state = defaultState(); refreshAll(); }
+        if (getCacheOwner()) { clearLocalCache(); state = freshState(); refreshAll(); }
         closeSheetOverlay();
         authMode = 'signin';
         updateAuthUI();

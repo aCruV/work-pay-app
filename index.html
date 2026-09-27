@@ -6,11 +6,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Work & Pay">
+<meta name="apple-mobile-web-app-title" content="Shifts Tracker">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
-<title>Work & Pay</title>
+<title>Shifts Tracker</title>
 <script src="money.boot.js"></script>
 <style>
   :root {
@@ -252,6 +252,7 @@
   .auth-title { font-size: 28px; font-weight: 800; margin-bottom: 20px; text-align: center; }
   .auth-error { color: var(--red); font-size: 13px; margin: 10px 4px 4px; min-height: 16px; text-align: center; }
   .auth-error.info { color: var(--muted); }
+  .auth-lang { width: fit-content; margin: 0 auto 22px; }
   .auth-screen.loading .auth-card { visibility: hidden; }
   .auth-link { display: block; margin: 14px auto 0; background: none; border: none; color: var(--accent); font-size: 14px; cursor: pointer; }
   .auth-link.hidden { display: none; }
@@ -268,8 +269,8 @@
 <body>
 <div class="splash" id="splash" aria-hidden="true">
   <div class="splash-inner">
-    <img class="splash-logo" src="icon-180.png" alt="" width="96" height="96">
-    <div class="splash-name">Work &amp; Pay</div>
+    <img class="splash-logo" src="splash-logo.png" alt="" width="96" height="96">
+    <div class="splash-name">Shifts Tracker</div>
     <div class="splash-dots"><span></span><span></span><span></span></div>
   </div>
 </div>
@@ -277,6 +278,10 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="auth-screen loading" id="authScreen">
     <form class="auth-card" id="authForm" novalidate>
+      <div class="seg-toggle auth-lang" id="authLangToggle">
+        <button type="button" class="seg-btn" data-lang="en">English</button>
+        <button type="button" class="seg-btn" data-lang="he">עברית</button>
+      </div>
       <div class="auth-title" id="authTitle">Sign In</div>
       <div class="list-group">
         <label class="auth-field"><input type="email" id="authEmail" placeholder="Email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254"></label>
