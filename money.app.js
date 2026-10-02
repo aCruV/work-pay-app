@@ -8,8 +8,9 @@
   const CATEGORY_KEYS = ['driving','cashback','bonus','reimbursement','other'];
   const SWIPE_W = 76;
   const ICON_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
-  const ICON_WALLET = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="16" cy="13" r="1.3" fill="currentColor" stroke="none"/></svg>';
   const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
+  const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6A17.4 17.4 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
 
   function defaultState() {
     return {
@@ -30,7 +31,7 @@
       },
       rateSets: [],
       shifts: [],
-      incomes: [],
+      additions: [],
       templates: []
     };
   }
@@ -67,7 +68,9 @@
 
   // Limits must stay in sync with firestore.rules.
   // Sized so a full account stays well under Firestore's 1 MiB per-document limit.
-  const LIMITS = { shifts: 3000, incomes: 1500, templates: 50, rateSets: 500, note: 200, category: 40, tplName: 24, currency: 4, importBytes: 2 * 1024 * 1024 };
+  const LIMITS = { shifts: 3000, additions: 50, templates: 50, rateSets: 500, note: 200, category: 40, tplName: 24, currency: 4, importBytes: 2 * 1024 * 1024 };
+  const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+  function isValidMonth(v) { return typeof v === 'string' && MONTH_RE.test(v); }
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const ID_RE = /^[A-Za-z0-9-]{1,64}$/;
@@ -152,16 +155,42 @@
         rateId: typeof x.rateId === 'string' && rateIdRemap.has(x.rateId) ? rateIdRemap.get(x.rateId) : fallbackRateId()
       }));
     const usedRateIds = new Set(shifts.map(x => x.rateId));
-    const incomes = list(src.incomes)
-      .filter(x => x && isValidDate(x.date) && num(x.amount, 0, 10000000, 0) > 0)
-      .slice(0, LIMITS.incomes)
-      .map(x => ({ id: uniqueId(x.id), date: x.date, category: str(x.category, LIMITS.category).trim() || 'other', amount: num(x.amount, 0, 10000000, 0), note: str(x.note, LIMITS.note) }));
+    // Monthly additions (e.g. driving expenses): each keeps an amount history so changing the
+    // amount later never rewrites months that already passed. One-time incomes are no longer kept.
+    const additions = list(src.additions)
+      .filter(x => x && isValidMonth(x.from) && Array.isArray(x.versions))
+      .slice(0, LIMITS.additions)
+      .map(x => {
+        const byMonth = new Map();
+        x.versions.forEach(v => { if (v && isValidMonth(v.from)) byMonth.set(v.from, num(v.amount, 0, 10000000, 0)); });
+        const versions = Array.from(byMonth.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([from, amount]) => ({ from, amount }));
+        return {
+          id: uniqueId(x.id), category: str(x.category, LIMITS.category).trim() || 'other', from: x.from,
+          until: isValidMonth(x.until) && x.until >= x.from ? x.until : null, versions
+        };
+      })
+      .filter(x => x.versions.length);
     const templates = list(src.templates)
       .filter(x => x && str(x.name, LIMITS.tplName).trim() && isValidTime(x.startTime) && isValidTime(x.endTime))
       .slice(0, LIMITS.templates)
       .map(x => ({ id: uniqueId(x.id), name: str(x.name, LIMITS.tplName).trim(), startTime: x.startTime, endTime: x.endTime }));
-    return { settings, rateSets: rateSets.filter(r => usedRateIds.has(r.id)), shifts, incomes, templates };
+    return { settings, rateSets: rateSets.filter(r => usedRateIds.has(r.id)), shifts, additions, templates };
   }
+
+  // ---- monthly additions ----
+  function additionAmountFor(a, month) {
+    if (month < a.from || (a.until && month > a.until)) return 0;
+    let amount = 0;
+    a.versions.forEach(v => { if (v.from <= month) amount = v.amount; });
+    return amount;
+  }
+  function monthHasShifts(month) { return state.shifts.some(s => monthKey(s.date) === month); }
+  // Additions only count in months where at least one shift was logged.
+  function additionsForMonth(month) {
+    if (!monthHasShifts(month)) return [];
+    return state.additions.map(a => ({ a, amount: additionAmountFor(a, month) })).filter(x => x.amount > 0);
+  }
+  function additionsTotal(month) { return additionsForMonth(month).reduce((sum, x) => sum + x.amount, 0); }
 
   function ratesFor(shift) {
     return state.rateSets.find(r => r.id === shift.rateId) || state.settings;
@@ -430,7 +459,6 @@
   function allMonths() {
     const set = new Set();
     state.shifts.forEach(s => set.add(monthKey(s.date)));
-    state.incomes.forEach(i => set.add(monthKey(i.date)));
     return Array.from(set).sort().reverse();
   }
 
@@ -448,15 +476,10 @@
     return state.shifts.filter(s => monthFilter === 'all' || monthKey(s.date) === monthFilter)
       .slice().sort((a,b) => (b.date+b.startTime).localeCompare(a.date+a.startTime));
   }
-  function filteredIncomes() {
-    return state.incomes.filter(i => monthFilter === 'all' || monthKey(i.date) === monthFilter)
-      .slice().sort((a,b) => b.date.localeCompare(a.date));
-  }
 
   function renderSummary() {
     renderPills('summaryMonthPills');
     const shifts = filteredShifts();
-    const incomes = filteredIncomes();
     let totalHours=0, weekendHours=0, holidayHours=0, bonusPay=0, workPay=0;
     shifts.forEach(s => {
       const c = calcShift(s);
@@ -466,7 +489,8 @@
       bonusPay += c.bonusPay;
       workPay += c.pay;
     });
-    const otherIncome = incomes.reduce((sum,i) => sum + i.amount, 0);
+    const months = monthFilter === 'all' ? allMonths() : [monthFilter];
+    const otherIncome = months.reduce((sum, m) => sum + additionsTotal(m), 0);
 
     $('sumTotal').textContent = money(workPay + otherIncome);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
@@ -574,44 +598,17 @@
     attachRowHandlers($('shiftsList'));
   }
 
-  function renderIncomes() {
-    renderPills('incomeMonthPills');
-    const incomes = filteredIncomes();
-    openSwipeRow = null;
-    if (!incomes.length) {
-      $('incomeList').outerHTML = `<div class="list-group" id="incomeList"><div class="empty-state"><div class="big">${ICON_WALLET}</div>${t('emptyIncome')}</div></div>`;
-      return;
-    }
-    const html = incomes.map(i => {
-      const dname = formatDateDisplay(i.date);
-      return `<div class="entry-row-wrap">
-        <button class="entry-swipe-delete">${ICON_TRASH}</button>
-        <div class="entry-row" data-id="${escapeHtml(i.id)}" data-kind="income">
-          <div class="entry-main">
-            <div class="entry-date">${escapeHtml(categoryLabel(i.category))}</div>
-            <div class="entry-sub">${escapeHtml(dname)}${i.note ? ' · ' + escapeHtml(i.note) : ''}</div>
-          </div>
-          <div class="entry-amount">${escapeHtml(money(i.amount))}</div>
-          <div class="entry-chevron">›</div>
-        </div>
-      </div>`;
-    }).join('');
-    $('incomeList').outerHTML = `<div class="list-group" id="incomeList">${html}</div>`;
-    attachRowHandlers($('incomeList'));
-  }
-
   function deleteShift(id) { state.shifts = state.shifts.filter(s => s.id !== id); save(); renderDataViews(); }
-  function deleteIncome(id) { state.incomes = state.incomes.filter(i => i.id !== id); save(); renderDataViews(); }
 
   function attachRowHandlers(container) {
     container.querySelectorAll('.entry-row-wrap').forEach(wrap => {
       const rowEl = wrap.querySelector('.entry-row');
       const id = rowEl.dataset.id;
       const kind = rowEl.dataset.kind;
-      attachSwipe(wrap, () => kind === 'shift' ? deleteShift(id) : deleteIncome(id));
+      attachSwipe(wrap, () => deleteShift(id));
       rowEl.addEventListener('click', () => {
         if (rowEl.dataset.justSwiped) { delete rowEl.dataset.justSwiped; return; }
-        if (kind === 'shift') openShiftSheet(id); else openIncomeSheet(id);
+        openShiftSheet(id);
       });
     });
   }
@@ -641,10 +638,9 @@
     renderGoalPills();
     const month = goalMonth();
     const shifts = state.shifts.filter(s => monthKey(s.date) === month);
-    const incomes = state.incomes.filter(i => monthKey(i.date) === month);
     let totalHours = 0, workPay = 0;
     shifts.forEach(s => { const c = calcShift(s); totalHours += c.totalHours; workPay += c.pay; });
-    const otherIncome = incomes.reduce((sum,i) => sum + i.amount, 0);
+    const otherIncome = additionsTotal(month);
     const totalEarn = workPay + otherIncome;
 
     const type = state.settings.goalType || 'hours';
@@ -668,7 +664,6 @@
   function renderDataViews() {
     renderSummary();
     renderShifts();
-    renderIncomes();
     renderGoals();
     renderApplyRatesList();
   }
@@ -855,7 +850,7 @@
     const today = todayStr();
     const flagKey = 'workTrackerBackup_' + uid;
     try { if (localStorage.getItem(flagKey) === today) return; } catch(e) {}
-    if (!state.shifts.length && !state.incomes.length && !state.templates.length) return;
+    if (!state.shifts.length && !state.additions.length && !state.templates.length) return;
     const col = backupsRef(uid);
     col.doc(today).get().then(snap => {
       const writes = [];
@@ -895,7 +890,7 @@
         <div class="section-footer" style="margin:0 4px 12px;">${escapeHtml(t('restoreHint'))}</div>
         <div class="list-group">${entries.map(e => `
           <div class="list-row picker-row" data-backup="${e.id}">
-            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', e.data.shifts.length).replace('{i}', e.data.incomes.length))}</span></div>
+            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', e.data.shifts.length))}</span></div>
             <span class="entry-chevron">›</span>
           </div>`).join('')}</div>`;
       $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
@@ -1042,8 +1037,7 @@
     const locale = rtl ? 'he-IL' : undefined;
     const shifts = state.shifts.filter(x => monthKey(x.date) === month)
       .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-    const incomes = state.incomes.filter(x => monthKey(x.date) === month)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const additions = additionsForMonth(month);
     const dateFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' });
     const dayFmt = d => new Date(d + 'T00:00:00').toLocaleDateString(locale, { weekday: 'long' });
     const dash = '–';
@@ -1100,16 +1094,16 @@
       total: [t('reportTotal'), '', '', '', fmt(sumHours), '', fmt(sumWeekend), fmt(sumOvertime), '', money(sumPay), '']
     }];
     let sumIncome = 0;
-    if (incomes.length) {
-      const incomeRows = incomes.map(x => {
+    if (additions.length) {
+      const additionRows = additions.map(x => {
         sumIncome += x.amount;
-        return [dateFmt(x.date), categoryLabel(x.category), money(x.amount), x.note || ''];
+        return [categoryLabel(x.a.category), money(x.amount)];
       });
       tables.push({
         title: t('reportOtherIncome'),
-        cols: [{ label: t('colDate'), width: 1600 }, { label: t('colCategory'), width: 3600 }, { label: t('colAmount'), width: 1800, align: 'right' }, { label: t('colNote'), width: 8398 }],
-        rows: incomeRows,
-        total: [t('reportTotal'), '', money(sumIncome), '']
+        cols: [{ label: t('colCategory'), width: 11398 }, { label: t('colAmount'), width: 4000, align: 'right' }],
+        rows: additionRows,
+        total: [t('reportTotal'), money(sumIncome)]
       });
     }
     const meta = [];
@@ -1122,7 +1116,7 @@
       ratesTitle: t('reportRates'),
       rateBlocks,
       tables,
-      summary: `${t('reportShiftCount')}: ${shifts.length}  ·  ${t('colHours')}: ${fmt(sumHours)}  ·  ${t('sumSubWork')}: ${money(sumPay)}${incomes.length ? `  ·  ${t('reportOtherIncome')}: ${money(sumIncome)}` : ''}`,
+      summary: `${t('reportShiftCount')}: ${shifts.length}  ·  ${t('colHours')}: ${fmt(sumHours)}  ·  ${t('sumSubWork')}: ${money(sumPay)}${additions.length ? `  ·  ${t('reportOtherIncome')}: ${money(sumIncome)}` : ''}`,
       grandTotal: `${t('reportGrandTotal')}: ${money(sumPay + sumIncome)}`,
       footer: t('reportFooter')
     };
@@ -1408,13 +1402,12 @@
     document.querySelectorAll('.tab-page').forEach(p => p.classList.add('hidden'));
     $('tab-' + tab).classList.remove('hidden');
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-    $('fab').classList.toggle('hidden', tab === 'summary' || tab === 'settings' || tab === 'goals');
+    $('fab').classList.toggle('hidden', tab !== 'shifts');
     $('content').scrollTop = 0;
   }
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('fab').addEventListener('click', () => {
     if (activeTab === 'shifts') openAddChoiceSheet();
-    else if (activeTab === 'income') openIncomeSheet(null);
   });
 
   // ---- sheet plumbing ----
@@ -1582,6 +1575,17 @@
     $('wkEndTimeValue').textContent = state.settings.weekendEndTime;
   }
 
+  // ---- earnings privacy: blurred every time the app opens, eye button reveals ----
+  function isMoneyHidden() { return document.querySelector('.app').classList.contains('money-hidden'); }
+  function setMoneyHidden(hidden) {
+    document.querySelector('.app').classList.toggle('money-hidden', hidden);
+    const btn = $('moneyToggle');
+    btn.innerHTML = hidden ? ICON_EYE : ICON_EYE_OFF;
+    btn.setAttribute('aria-label', t(hidden ? 'showAmounts' : 'hideAmounts'));
+    btn.setAttribute('aria-pressed', String(!hidden));
+  }
+  $('moneyToggle').addEventListener('click', () => setMoneyHidden(!isMoneyHidden()));
+
   // ---- language ----
   function applyLanguage() {
     const lang = getLang();
@@ -1596,6 +1600,8 @@
     try { localStorage.setItem(UI_LANG_KEY, lang); } catch(e) {}
     renderDataViews();
     renderTemplatesSettings();
+    renderAdditionsSettings();
+    setMoneyHidden(isMoneyHidden());
   }
   $('languageToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
     state.settings.language = b.dataset.lang;
@@ -1720,6 +1726,101 @@
       save(); closeSheetOverlay(); renderTemplatesSettings();
     });
     openSheetOverlay();
+  }
+
+  // ---- monthly additions in Settings ----
+  function monthOptionsHtml(selected) {
+    const months = Array.from(new Set([currentMonthStr(), ...allMonths(), selected].filter(Boolean))).sort().reverse();
+    return months.map(m => `<option value="${m}" ${m === selected ? 'selected' : ''}>${escapeHtml(monthLongLabel(m))}</option>`).join('');
+  }
+  // The month whose amount best describes an addition right now.
+  function additionDisplayMonth(a) {
+    const cur = currentMonthStr();
+    if (a.until && a.until < cur) return a.until;
+    return a.from > cur ? a.from : cur;
+  }
+  function renderAdditionsSettings() {
+    const el = $('additionsList');
+    if (!el) return;
+    if (!state.additions.length) {
+      el.innerHTML = `<div class="list-row"><div class="rlabel" style="color:var(--muted);">${escapeHtml(t('additionsEmpty'))}</div></div>`;
+      return;
+    }
+    const cur = currentMonthStr();
+    el.innerHTML = state.additions.map(a => {
+      const ended = a.until && a.until < cur;
+      let sub = `${money(additionAmountFor(a, additionDisplayMonth(a)))} ${t('additionPerMonth')} · ${t('additionSince').replace('{m}', monthLongLabel(a.from))}`;
+      if (a.until) sub += ` · ${t('additionUntil').replace('{m}', monthLongLabel(a.until))}`;
+      return `<div class="list-row picker-row${ended ? ' addition-ended' : ''}" data-addition="${escapeHtml(a.id)}">
+        <div class="rlabel">${escapeHtml(categoryLabel(a.category))}<span class="rsub">${escapeHtml(sub)}</span></div>
+        <span class="entry-chevron">›</span>
+      </div>`;
+    }).join('');
+    el.querySelectorAll('[data-addition]').forEach(row => row.addEventListener('click', () => openAdditionSheet(row.dataset.addition)));
+  }
+  $('addAdditionBtn').addEventListener('click', () => openAdditionSheet(null));
+
+  function openAdditionSheet(id) {
+    sheetMode = 'addition'; editingId = id;
+    $('sheetSave').style.visibility = '';
+    const a = id ? state.additions.find(x => x.id === id) : null;
+    const cur = currentMonthStr();
+    const lang = getLang();
+    const ended = !!(a && a.until && a.until < cur);
+    let currentKey = 'driving', customVal = '';
+    if (a) {
+      if (CATEGORY_KEYS.includes(a.category)) currentKey = a.category;
+      else { currentKey = 'other'; customVal = a.category; }
+    }
+    const amountNow = a ? additionAmountFor(a, additionDisplayMonth(a)) : '';
+    let note = '';
+    if (ended) note = t('additionEndedNote').replace('{m}', monthLongLabel(a.until));
+    else if (a) note = t('additionChangeNote').replace('{m}', monthLongLabel(a.from > cur ? a.from : cur));
+    $('sheetTitle').textContent = a ? t('sheetEditAddition') : t('sheetNewAddition');
+    $('sheetBody').innerHTML = `
+      <div class="field-group">
+        <div class="list-group">
+          <div class="list-row">
+            <div class="rlabel">${escapeHtml(t('fieldCategory'))}</div>
+            <select id="fCategory">${CATEGORY_KEYS.map(k => `<option value="${k}" ${k === currentKey ? 'selected' : ''}>${escapeHtml(CATEGORY_LABELS[lang][k])}</option>`).join('')}</select>
+          </div>
+          <div class="list-row ${currentKey === 'other' ? '' : 'hidden'}" id="fCustomCatRow"><div class="rlabel">${escapeHtml(t('fieldCustomLabel'))}</div><input type="text" id="fCustomCat" maxlength="${LIMITS.category}" placeholder="${escapeHtml(t('customLabelPlaceholder'))}" value="${escapeHtml(customVal)}"></div>
+          <div class="list-row"><div class="rlabel">${escapeHtml(t('additionAmountMonthly'))}</div><input type="number" id="fAmount" min="0" max="10000000" step="0.01" inputmode="decimal" value="${escapeHtml(amountNow)}" ${ended ? 'disabled' : ''}></div>
+          <div class="list-row"><div class="rlabel">${escapeHtml(t('additionStarts'))}</div><select id="fFrom" ${ended ? 'disabled' : ''}>${monthOptionsHtml(a ? a.from : cur)}</select></div>
+        </div>
+        ${note ? `<div class="section-footer">${escapeHtml(note)}</div>` : ''}
+      </div>
+      ${a ? `<div class="btn-stack">
+        ${ended ? '' : `<button type="button" class="btn-plain btn-block" id="fStopAddition">${escapeHtml(t('additionStop').replace('{m}', monthLongLabel(cur)))}</button>`}
+        <button type="button" class="btn-danger btn-block" id="fDeleteAddition">${escapeHtml(t('additionDeleteAll'))}</button>
+      </div>` : ''}`;
+    $('fCategory').addEventListener('change', () => { $('fCustomCatRow').classList.toggle('hidden', $('fCategory').value !== 'other'); });
+    if (a && !ended) $('fStopAddition').addEventListener('click', () => {
+      if (!confirm(t('confirmStopAddition').replace('{m}', monthLongLabel(cur)))) return;
+      rememberForUndo();
+      const [y, m] = cur.split('-').map(Number);
+      const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+      if (prev < a.from) state.additions = state.additions.filter(x => x.id !== a.id);
+      else a.until = prev;
+      save(); closeSheetOverlay(); refreshAll();
+      offerUndo(t('additionStopped'));
+    });
+    if (a) $('fDeleteAddition').addEventListener('click', () => {
+      if (!confirm(t('confirmDeleteAddition'))) return;
+      rememberForUndo();
+      state.additions = state.additions.filter(x => x.id !== a.id);
+      save(); closeSheetOverlay(); refreshAll();
+      offerUndo(t('additionDeleted'));
+    });
+    openSheetOverlay();
+  }
+
+  // Keep the first amount anchored at the start month after the start month moves.
+  function reanchorAdditionVersions(a) {
+    const sorted = a.versions.slice().sort((x, y) => x.from.localeCompare(y.from));
+    let atStart = sorted[0].amount;
+    sorted.forEach(v => { if (v.from <= a.from) atStart = v.amount; });
+    a.versions = [{ from: a.from, amount: atStart }].concat(sorted.filter(v => v.from > a.from));
   }
 
   // ---- add/edit shift sheet ----
@@ -1998,66 +2099,6 @@
     offerUndo(candidates.length === 1 ? t('weekAddedOne') : t('weekAdded').replace('{n}', candidates.length));
   }
 
-  function openIncomeSheet(id) {
-    sheetMode = 'income'; editingId = id;
-    $('sheetSave').style.visibility = '';
-    const income = id ? state.incomes.find(i => i.id === id) : null;
-    const lang = getLang();
-    let currentKey = 'driving';
-    let customVal = '';
-    if (income) {
-      if (CATEGORY_KEYS.includes(income.category)) currentKey = income.category;
-      else { currentKey = 'other'; customVal = income.category; }
-    }
-    formIncome = { date: income ? income.date : todayStr() };
-    $('sheetTitle').textContent = income ? t('sheetEditIncome') : t('sheetNewIncome');
-    $('sheetBody').innerHTML = `
-      <div class="field-group">
-        <div class="list-group">
-          <div class="list-row picker-row" data-toggle="panelIncomeDate"><div class="rlabel" data-i18n="fieldDate">Date</div><div><span class="picker-value" id="valIncomeDate"></span><span class="chev">⌄</span></div></div>
-        </div>
-        <div class="wheel-panel hidden" id="panelIncomeDate">
-          <div class="wheel-fade-top"></div>
-          <div class="wheel-col" data-col="day"></div>
-          <div class="wheel-col" data-col="month"></div>
-          <div class="wheel-col" data-col="year"></div>
-          <div class="wheel-highlight"></div>
-          <div class="wheel-fade-bottom"></div>
-        </div>
-      </div>
-      <div class="field-group">
-        <div class="list-group">
-          <div class="list-row">
-            <div class="rlabel" data-i18n="fieldCategory">Category</div>
-            <select id="fCategory">
-              ${CATEGORY_KEYS.map(k => `<option value="${k}" ${k===currentKey?'selected':''}>${CATEGORY_LABELS[lang][k]}</option>`).join('')}
-            </select>
-          </div>
-          <div class="list-row ${currentKey==='other'?'':'hidden'}" id="fCustomCatRow"><div class="rlabel" data-i18n="fieldCustomLabel">Custom label</div><input type="text" id="fCustomCat" maxlength="${LIMITS.category}" placeholder="${escapeHtml(t('customLabelPlaceholder'))}" value="${escapeHtml(customVal)}"></div>
-          <div class="list-row"><div class="rlabel" data-i18n="fieldAmount">Amount</div><input type="number" id="fAmount" min="0" max="10000000" step="0.01" inputmode="decimal" value="${income ? escapeHtml(income.amount) : ''}"></div>
-        </div>
-      </div>
-      <div class="field-group">
-        <div class="list-group">
-          <div class="list-row"><div class="rlabel" data-i18n="fieldNote">Note</div><input type="text" id="fNote" maxlength="${LIMITS.note}" placeholder="${escapeHtml(t('notePlaceholder'))}" value="${income && income.note ? escapeHtml(income.note) : ''}"></div>
-        </div>
-      </div>
-      ${income ? `<button class="btn-danger btn-block" id="fDelete" data-i18n="deleteIncomeBtn">Delete Entry</button>` : ''}
-    `;
-    applyStaticTranslations();
-    initDatePicker($('panelIncomeDate'), formIncome.date, v => { formIncome.date = v; $('valIncomeDate').textContent = formatDateDisplay(v); });
-    setupPickerToggles($('sheetBody'));
-    $('fCategory').addEventListener('change', () => {
-      $('fCustomCatRow').classList.toggle('hidden', $('fCategory').value !== 'other');
-    });
-    if (income) $('fDelete').addEventListener('click', () => {
-      if (!confirm(t('confirmDeleteIncome'))) return;
-      deleteIncome(id);
-      closeSheetOverlay();
-    });
-    openSheetOverlay();
-  }
-
   $('sheetSave').addEventListener('click', () => {
     if (sheetMode === 'shift') {
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
@@ -2079,22 +2120,41 @@
       } else {
         state.shifts.push(shiftObj);
       }
-    } else if (sheetMode === 'income') {
-      const amount = parseFloat($('fAmount').value);
+    } else if (sheetMode === 'addition') {
       let category = CATEGORY_KEYS.includes($('fCategory').value) ? $('fCategory').value : 'other';
       if (category === 'other') {
         const custom = $('fCustomCat').value.trim().slice(0, LIMITS.category);
         if (custom) category = custom;
       }
-      if (!isValidDate(formIncome.date) || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) { alert(t('alertFillIncome')); return; }
-      if (!editingId && state.incomes.length >= LIMITS.incomes) { alert(t('alertLimitReached')); return; }
-      const incomeObj = { id: editingId || genId(), date: formIncome.date, category, amount: Math.round(amount * 100) / 100, note: $('fNote').value.trim().slice(0, LIMITS.note) };
-      if (editingId) {
-        const idx = state.incomes.findIndex(i => i.id === editingId);
-        if (idx !== -1) state.incomes[idx] = incomeObj;
+      const existing = editingId ? state.additions.find(x => x.id === editingId) : null;
+      const cur = currentMonthStr();
+      const ended = !!(existing && existing.until && existing.until < cur);
+      if (ended) {
+        existing.category = category;
       } else {
-        state.incomes.push(incomeObj);
+        const amount = parseFloat($('fAmount').value);
+        const from = $('fFrom').value;
+        if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000 || !isValidMonth(from)) { alert(t('alertFillAddition')); return; }
+        const value = Math.round(amount * 100) / 100;
+        if (existing) {
+          existing.category = category;
+          existing.from = from;
+          if (existing.until && existing.until < from) existing.until = null;
+          reanchorAdditionVersions(existing);
+          // A new amount applies from this month on (or from the start, if it hasn't started yet).
+          const point = from > cur ? from : cur;
+          if (additionAmountFor(existing, point) !== value) {
+            existing.versions = existing.versions.filter(v => v.from < point).concat({ from: point, amount: value });
+          }
+        } else {
+          if (state.additions.length >= LIMITS.additions) { alert(t('alertLimitReached')); return; }
+          state.additions.push({ id: genId(), category, from, until: null, versions: [{ from, amount: value }] });
+        }
       }
+      save();
+      closeSheetOverlay();
+      refreshAll();
+      return;
     } else if (sheetMode === 'template') {
       const name = $('fTplName').value.trim().slice(0, LIMITS.tplName);
       if (!name) { alert(t('alertFillTemplateName')); return; }
