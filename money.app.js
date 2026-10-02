@@ -1413,7 +1413,7 @@
   }
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('fab').addEventListener('click', () => {
-    if (activeTab === 'shifts') openShiftSheet(null);
+    if (activeTab === 'shifts') openAddChoiceSheet();
     else if (activeTab === 'income') openIncomeSheet(null);
   });
 
@@ -1672,6 +1672,7 @@
 
   function openTemplateSheet(id) {
     sheetMode = 'template'; editingId = id;
+    $('sheetSave').style.visibility = '';
     const tpl = id ? state.templates.find(x => x.id === id) : null;
     formTemplate = {
       name: tpl ? tpl.name : '',
@@ -1724,6 +1725,7 @@
   // ---- add/edit shift sheet ----
   function openShiftSheet(id) {
     sheetMode = 'shift'; editingId = id;
+    $('sheetSave').style.visibility = '';
     const shift = id ? state.shifts.find(s => s.id === id) : null;
     const defaultStart = nowTimeStr();
     formShift = {
@@ -1819,8 +1821,186 @@
     openSheetOverlay();
   }
 
+  // ---- "+" on the Shifts tab: choose a single shift or a whole week ----
+  function comingSundayStr() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + (7 - d.getDay()) % 7);
+    return dateStr(d);
+  }
+  function addDaysStr(ds, n) {
+    const [y, m, d] = ds.split('-').map(Number);
+    return dateStr(new Date(y, m - 1, d + n));
+  }
+  function weekRangeLabel(start) {
+    const locale = getLang() === 'he' ? 'he-IL' : undefined;
+    const fmtDay = ds => new Date(ds + 'T00:00:00').toLocaleDateString(locale, { day: 'numeric', month: 'short' });
+    return `${fmtDay(start)} – ${fmtDay(addDaysStr(start, 6))}`;
+  }
+
+  function openAddChoiceSheet() {
+    sheetMode = 'addChoice'; editingId = null;
+    $('sheetTitle').textContent = t('addShiftsTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `
+      <div class="btn-stack">
+        <button type="button" class="btn-plain btn-block add-choice" id="addSingleBtn">
+          <span class="add-choice-title">${escapeHtml(t('addSingle'))}</span>
+          <span class="add-choice-sub">${escapeHtml(t('addSingleSub'))}</span>
+        </button>
+        <button type="button" class="btn-plain btn-block add-choice" id="addWeekBtn">
+          <span class="add-choice-title">${escapeHtml(t('addWeek'))}</span>
+          <span class="add-choice-sub">${escapeHtml(weekRangeLabel(comingSundayStr()))}</span>
+        </button>
+      </div>`;
+    $('addSingleBtn').addEventListener('click', () => openShiftSheet(null));
+    $('addWeekBtn').addEventListener('click', openWeekSheet);
+    openSheetOverlay();
+  }
+
+  // ---- week planner: the coming Sunday–Saturday, one shift per day ----
+  let weekPlan = [];
+  function wheelPanelHtml(id) {
+    return `<div class="wheel-panel hidden" id="${id}">
+      <div class="wheel-fade-top"></div>
+      <div class="wheel-col" data-col="hour"></div>
+      <div class="wheel-col" data-col="minute"></div>
+      <div class="wheel-highlight"></div>
+      <div class="wheel-fade-bottom"></div>
+    </div>`;
+  }
+  function weekDayTimes(d) {
+    if (d.mode === 'tpl') {
+      const tpl = state.templates.find(x => x.id === d.tplId);
+      return tpl ? { start: tpl.startTime, end: tpl.endTime } : null;
+    }
+    if (d.mode === 'custom') return { start: d.customStart, end: d.customEnd };
+    return null;
+  }
+
+  function openWeekSheet() {
+    sheetMode = 'week'; editingId = null;
+    const start = comingSundayStr();
+    const locale = getLang() === 'he' ? 'he-IL' : undefined;
+    weekPlan = Array.from({ length: 7 }, (_, i) => ({
+      date: addDaysStr(start, i), mode: 'off', tplId: null,
+      customStart: '09:00', customEnd: '17:00', pickersReady: false, holiday: false
+    }));
+    $('sheetTitle').textContent = t('weekTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    const tplChips = state.templates.map(tpl =>
+      `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
+    $('sheetBody').innerHTML = `
+      <div class="week-range">${escapeHtml(weekRangeLabel(start))}</div>
+      ${state.templates.length ? '' : `<div class="tpl-empty-hint" style="margin:0 2px 10px;">${escapeHtml(t('noTemplatesHint'))}</div>`}
+      ${weekPlan.map((d, i) => {
+        const date = new Date(d.date + 'T00:00:00');
+        return `<div class="week-day" data-day="${i}">
+          <div class="week-day-head">
+            <span class="week-day-name">${escapeHtml(date.toLocaleDateString(locale, { weekday: 'long' }))}</span>
+            <span class="week-day-date">${escapeHtml(date.toLocaleDateString(locale, { day: 'numeric', month: 'short' }))}</span>
+          </div>
+          <div class="week-existing hidden" id="weekExisting${i}"></div>
+          <div class="week-chips">
+            <button type="button" class="week-chip" data-mode="off">${escapeHtml(t('weekOff'))}</button>
+            ${tplChips}
+            <button type="button" class="week-chip" data-mode="custom">${escapeHtml(t('weekCustom'))}</button>
+          </div>
+          <div class="week-custom hidden" id="weekCustom${i}">
+            <div class="list-group"><div class="list-row picker-row" data-toggle="weekStartPanel${i}"><div class="rlabel">${escapeHtml(t('fieldStartTime'))}</div><div><span class="picker-value" id="weekStartVal${i}"></span><span class="chev">⌄</span></div></div></div>
+            ${wheelPanelHtml('weekStartPanel' + i)}
+            <div class="list-group"><div class="list-row picker-row" data-toggle="weekEndPanel${i}"><div class="rlabel">${escapeHtml(t('fieldEndTime'))}</div><div><span class="picker-value" id="weekEndVal${i}"></span><span class="chev">⌄</span></div></div></div>
+            ${wheelPanelHtml('weekEndPanel' + i)}
+          </div>
+          <div class="week-holiday hidden" id="weekHoliday${i}">
+            <span>${escapeHtml(t('fieldHoliday'))}</span>
+            <label class="switch"><input type="checkbox" id="weekHolidayInput${i}"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+        </div>`;
+      }).join('')}
+      <button type="button" class="btn-accent btn-block" id="weekSaveBtn" disabled></button>`;
+    setupPickerToggles($('sheetBody'));
+    weekPlan.forEach((d, i) => {
+      const card = $('sheetBody').querySelector(`[data-day="${i}"]`);
+      card.querySelectorAll('.week-chip').forEach(chip => chip.addEventListener('click', () => {
+        if (chip.dataset.mode === 'custom' && !d.pickersReady) {
+          // Custom times start from whatever the day had (e.g. the template just chosen).
+          const seed = weekDayTimes(d);
+          if (seed) { d.customStart = seed.start; d.customEnd = seed.end; }
+          d.pickersReady = true;
+          initTimePicker($('weekStartPanel' + i), d.customStart, v => { d.customStart = v; $('weekStartVal' + i).textContent = v; updateWeekDay(i); });
+          initTimePicker($('weekEndPanel' + i), d.customEnd, v => { d.customEnd = v; $('weekEndVal' + i).textContent = v; updateWeekDay(i); });
+        }
+        d.mode = chip.dataset.mode;
+        d.tplId = chip.dataset.tpl || null;
+        updateWeekDay(i);
+      }));
+      $('weekHolidayInput' + i).addEventListener('change', e => { d.holiday = e.target.checked; });
+      updateWeekDay(i);
+    });
+    $('weekSaveBtn').addEventListener('click', saveWeekPlan);
+    openSheetOverlay();
+  }
+
+  function updateWeekDay(i) {
+    const d = weekPlan[i];
+    const card = $('sheetBody').querySelector(`[data-day="${i}"]`);
+    if (!card) return;
+    card.classList.toggle('active', d.mode !== 'off');
+    card.querySelectorAll('.week-chip').forEach(chip => chip.classList.toggle('active',
+      chip.dataset.mode === d.mode && (d.mode !== 'tpl' || chip.dataset.tpl === d.tplId)));
+    $('weekCustom' + i).classList.toggle('hidden', d.mode !== 'custom');
+    $('weekHoliday' + i).classList.toggle('hidden', d.mode === 'off');
+    const existing = state.shifts.filter(s => s.date === d.date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const times = weekDayTimes(d);
+    const same = !!times && times.start === times.end;
+    const clash = !!times && !same && !!findClash({ date: d.date, startTime: times.start, endTime: times.end }, null);
+    const parts = [];
+    if (existing.length) parts.push(t('weekExisting').replace('{s}', existing.map(s => `${s.startTime}–${s.endTime}`).join(', ')));
+    if (same) parts.push(t('alertSameTimes'));
+    else if (clash) parts.push(t('weekClash'));
+    const el = $('weekExisting' + i);
+    el.textContent = parts.join(' · ');
+    el.classList.toggle('hidden', !parts.length);
+    el.classList.toggle('clash', same || clash);
+    updateWeekSaveBtn();
+  }
+
+  function weekPicks() {
+    return weekPlan.map(d => ({ d, times: weekDayTimes(d) })).filter(x => x.times && x.times.start !== x.times.end);
+  }
+  function updateWeekSaveBtn() {
+    const btn = $('weekSaveBtn');
+    if (!btn) return;
+    const n = weekPicks().length;
+    btn.disabled = n === 0;
+    btn.textContent = n === 0 ? t('weekAddNone') : n === 1 ? t('weekAddOne') : t('weekAddN').replace('{n}', n);
+  }
+
+  function saveWeekPlan() {
+    const picks = weekPicks();
+    if (!picks.length) return;
+    if (state.shifts.length + picks.length > LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+    const candidates = picks.map(x => ({ id: genId(), date: x.d.date, startTime: x.times.start, endTime: x.times.end, isHoliday: x.d.holiday, note: '' }));
+    // Overlaps with shifts already logged, and between the new shifts themselves (e.g. an overnight shift into the next day).
+    const flagged = findOverlaps(candidates);
+    candidates.forEach(c => { if (findClash(c, null)) flagged.add(c.id); });
+    if (flagged.size) {
+      const dates = candidates.filter(c => flagged.has(c.id)).map(c => formatDateDisplay(c.date)).join(', ');
+      if (!confirm(t('weekConfirmClash').replace('{d}', dates))) return;
+    }
+    rememberForUndo();
+    const rateId = ensureCurrentRateSet();
+    candidates.forEach(c => { c.rateId = rateId; state.shifts.push(c); });
+    save();
+    closeSheetOverlay();
+    refreshAll();
+    offerUndo(candidates.length === 1 ? t('weekAddedOne') : t('weekAdded').replace('{n}', candidates.length));
+  }
+
   function openIncomeSheet(id) {
     sheetMode = 'income'; editingId = id;
+    $('sheetSave').style.visibility = '';
     const income = id ? state.incomes.find(i => i.id === id) : null;
     const lang = getLang();
     let currentKey = 'driving';

@@ -211,6 +211,29 @@
   .tpl-name { font-size: 13px; font-weight: 700; }
   .tpl-time { font-size: 11px; color: var(--muted); }
   .tpl-empty-hint { font-size: 12.5px; color: var(--muted); padding: 4px 2px; }
+
+  /* add-shift choice + week planner */
+  .add-choice { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 16px; }
+  .add-choice-title { font-size: 16px; font-weight: 700; }
+  .add-choice-sub { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+  .week-range { font-size: 13px; color: var(--muted); font-weight: 600; text-align: center; margin: 0 0 12px; }
+  .week-day { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; border: 1.5px solid transparent; transition: border-color .15s; }
+  .week-day.active { border-color: var(--accent); }
+  .week-day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .week-day-name { font-size: 15px; font-weight: 700; }
+  .week-day-date { font-size: 13px; color: var(--muted); }
+  .week-existing { font-size: 12px; color: var(--muted); margin: -2px 0 8px; }
+  .week-existing.clash { color: var(--red); font-weight: 600; }
+  .week-existing.hidden, .week-custom.hidden, .week-holiday.hidden { display: none; }
+  .week-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .week-chip { border: none; background: var(--track-off); color: var(--text); font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 999px; cursor: pointer; }
+  .week-chip-time { font-weight: 500; opacity: .7; font-size: 11.5px; }
+  .week-chip.active { background: var(--accent); color: #fff; }
+  .week-chip.active .week-chip-time { opacity: .85; }
+  .week-custom { margin-top: 10px; }
+  .week-custom .list-group { border: 1px solid var(--sep); margin-bottom: 8px; }
+  .week-holiday { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 14px; }
+  #weekSaveBtn { margin-top: 6px; }
   .tpl-row .rlabel { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .tpl-order { display: flex; gap: 6px; flex: none; }
   .tpl-move { width: 32px; height: 32px; border-radius: 8px; border: none; background: var(--track-off); color: var(--text); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
