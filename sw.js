@@ -1,7 +1,7 @@
 // Lets the app open with no connection. App files are network-first (so updates show up on
 // the next launch while online) with the saved copy as a fallback; the version-pinned Firebase
 // libraries never change, so they're served from the saved copy. Bump CACHE when shipping changes.
-const CACHE = 'work-pay-2026-10-02-3';
+const CACHE = 'work-pay-2026-10-02-4';
 const APP_FILES = ['./', 'index.html', 'money.boot.js', 'money.firebase.js', 'money.i18n.js', 'money.app.js', 'icon-180.png', 'splash-logo.png', 'favicon-32.png'];
 const LIB_FILES = [
   'https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js',
