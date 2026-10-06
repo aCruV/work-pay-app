@@ -1955,7 +1955,7 @@
         </button>
       </div>`;
     $('addSingleBtn').addEventListener('click', () => openShiftSheet(null));
-    $('addWeekBtn').addEventListener('click', openWeekSheet);
+    $('addWeekBtn').addEventListener('click', () => openWeekSheet(0));
     openSheetOverlay();
   }
 
@@ -1979,9 +1979,13 @@
     return null;
   }
 
-  function openWeekSheet() {
+  // offset = weeks away from the coming week (0 = coming week, -1 = the week before, 1 = the week after).
+  const WEEK_NAV_LIMIT = 104;
+  let weekOffset = 0;
+  function openWeekSheet(offset) {
     sheetMode = 'week'; editingId = null;
-    const start = comingSundayStr();
+    weekOffset = Math.max(-WEEK_NAV_LIMIT, Math.min(WEEK_NAV_LIMIT, Number(offset) || 0));
+    const start = addDaysStr(comingSundayStr(), 7 * weekOffset);
     const locale = getLang() === 'he' ? 'he-IL' : undefined;
     weekPlan = Array.from({ length: 7 }, (_, i) => ({
       date: addDaysStr(start, i), mode: 'off', tplId: null,
@@ -1992,7 +1996,16 @@
     const tplChips = state.templates.map(tpl =>
       `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
     $('sheetBody').innerHTML = `
-      <div class="week-range">${escapeHtml(weekRangeLabel(start))}</div>
+      <div class="week-nav">
+        <button type="button" class="week-nav-btn" id="weekPrevBtn" aria-label="${escapeHtml(t('weekPrev'))}" ${weekOffset <= -WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <div class="week-nav-label">
+          <div class="week-range">${escapeHtml(weekRangeLabel(start))}</div>
+          ${weekOffset === 0
+            ? `<div class="week-nav-sub">${escapeHtml(t('weekComing'))}</div>`
+            : `<button type="button" class="week-nav-back" id="weekBackBtn">${escapeHtml(t('weekBackToComing'))}</button>`}
+        </div>
+        <button type="button" class="week-nav-btn" id="weekNextBtn" aria-label="${escapeHtml(t('weekNext'))}" ${weekOffset >= WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+      </div>
       ${state.templates.length ? '' : `<div class="tpl-empty-hint" style="margin:0 2px 10px;">${escapeHtml(t('noTemplatesHint'))}</div>`}
       ${weekPlan.map((d, i) => {
         const date = new Date(d.date + 'T00:00:00');
@@ -2040,7 +2053,17 @@
       updateWeekDay(i);
     });
     $('weekSaveBtn').addEventListener('click', saveWeekPlan);
+    $('weekPrevBtn').addEventListener('click', () => switchWeek(weekOffset - 1));
+    $('weekNextBtn').addEventListener('click', () => switchWeek(weekOffset + 1));
+    if ($('weekBackBtn')) $('weekBackBtn').addEventListener('click', () => switchWeek(0));
+    $('sheetBody').scrollTop = 0;
     openSheetOverlay();
+  }
+
+  // Picks belong to the week on screen, so ask before switching would discard them.
+  function switchWeek(offset) {
+    if (weekPicks().length && !confirm(t('weekSwitchConfirm'))) return;
+    openWeekSheet(offset);
   }
 
   function updateWeekDay(i) {

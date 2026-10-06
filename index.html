@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Shifts Tracker">
 <meta name="mobile-web-app-capable" content="yes">
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="icon-180.png?v=5">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=5">
 <title>Shifts Tracker</title>
 <script src="money.boot.js"></script>
 <style>
@@ -223,6 +223,16 @@
   .add-choice-title { font-size: 16px; font-weight: 700; }
   .add-choice-sub { font-size: 12.5px; color: var(--muted); font-weight: 500; }
   .week-range { font-size: 13px; color: var(--muted); font-weight: 600; text-align: center; margin: 0 0 12px; }
+  .week-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; }
+  .week-nav-btn { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--track-off); color: var(--accent); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+  .week-nav-btn svg { width: 20px; height: 20px; }
+  [dir="rtl"] .week-nav-btn svg { transform: scaleX(-1); }
+  .week-nav-btn:not(:disabled):active { opacity: 0.6; }
+  .week-nav-btn:disabled { opacity: 0.3; cursor: default; }
+  .week-nav-label { flex: 1; min-width: 0; text-align: center; }
+  .week-nav .week-range { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+  .week-nav-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .week-nav-back { border: none; background: none; color: var(--accent); font-size: 12px; font-weight: 600; padding: 2px 0 0; cursor: pointer; }
   .week-day { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; border: 1.5px solid transparent; transition: border-color .15s; }
   .week-day.active { border-color: var(--accent); }
   .week-day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
@@ -298,7 +308,7 @@
 <body>
 <div class="splash" id="splash" aria-hidden="true">
   <div class="splash-inner">
-    <img class="splash-logo" src="splash-logo.png" alt="" width="96" height="96">
+    <img class="splash-logo" src="splash-logo.png?v=5" alt="" width="96" height="96">
     <div class="splash-name">Shifts Tracker</div>
     <div class="splash-dots"><span></span><span></span><span></span></div>
   </div>
