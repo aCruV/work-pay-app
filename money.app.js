@@ -232,7 +232,8 @@
   const OWNER_KEY = 'workTrackerOwner';
   function getCacheOwner() { try { return localStorage.getItem(OWNER_KEY); } catch(e) { return null; } }
   function clearLocalCache() {
-    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); localStorage.removeItem(OWNER_KEY); } catch(e) {}
+    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); localStorage.removeItem(OWNER_KEY); localStorage.removeItem(BASE_KEY); } catch(e) {}
+    baseJson = null;
   }
 
   let state = load();
@@ -240,22 +241,106 @@
   let firestoreUnsub = null;
   let remoteReady = false;
 
+  // The data as the cloud last confirmed it. Comparing it with `state` shows which changes were
+  // made on this device, so they're merged into whatever other devices saved meanwhile instead of
+  // overwriting it. It's stored next to the data, so offline changes still merge after a restart.
+  const BASE_KEY = 'workTrackerSyncBase';
+  let baseJson = (() => {
+    try { const raw = localStorage.getItem(BASE_KEY); return raw ? JSON.stringify(normalizeState(JSON.parse(raw))) : null; } catch(e) { return null; }
+  })();
+  function setBase(data) { baseJson = data ? JSON.stringify(data) : null; }
+  function hasLocalChanges() { return baseJson !== null && JSON.stringify(state) !== baseJson; }
+
   function saveLocal() {
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
+      if (baseJson === null) localStorage.removeItem(BASE_KEY); else localStorage.setItem(BASE_KEY, baseJson);
       if (currentUser) localStorage.setItem(OWNER_KEY, currentUser.uid);
     } catch(e) {}
   }
 
-  // Firestore writes are batched: rapid changes (e.g. scrolling a wheel) become one write.
+  // Three-way merge: this device's changes (base -> local) applied on top of the cloud copy.
+  // List items are matched by id; when both sides touched the same item, an edit beats a delete.
+  function mergeStates(base, local, remote) {
+    base = base || { settings: {}, rateSets: [], shifts: [], additions: [], templates: [] };
+    const settings = Object.assign({}, remote.settings);
+    Object.keys(local.settings).forEach(k => { if (local.settings[k] !== base.settings[k]) settings[k] = local.settings[k]; });
+    const mergeList = (b, l, r) => {
+      const was = new Map(b.map(x => [x.id, JSON.stringify(x)]));
+      const mine = new Map(l.map(x => [x.id, x]));
+      const out = [];
+      const inRemote = new Set();
+      r.forEach(x => {
+        inRemote.add(x.id);
+        const m = mine.get(x.id);
+        if (m && JSON.stringify(m) !== was.get(x.id)) out.push(m);
+        else if (m || !was.has(x.id) || JSON.stringify(x) !== was.get(x.id)) out.push(x);
+      });
+      l.forEach(x => { if (!inRemote.has(x.id) && (!was.has(x.id) || JSON.stringify(x) !== was.get(x.id))) out.push(x); });
+      return out;
+    };
+    const shifts = mergeList(base.shifts, local.shifts, remote.shifts);
+    const rateSets = mergeList(base.rateSets, local.rateSets, remote.rateSets);
+    // A rate set removed here as unused may be in use by a shift another device added.
+    const known = new Set(rateSets.map(r => r.id));
+    remote.rateSets.concat(local.rateSets, base.rateSets).forEach(r => {
+      if (!known.has(r.id) && shifts.some(x => x.rateId === r.id)) { rateSets.push(r); known.add(r.id); }
+    });
+    return normalizeState({
+      settings, rateSets, shifts,
+      additions: mergeList(base.additions, local.additions, remote.additions),
+      templates: mergeList(base.templates, local.templates, remote.templates)
+    });
+  }
+
+  // Changes are sent in a transaction that reads the cloud copy and merges this device's changes
+  // into it, so two devices (or one that was offline) never overwrite each other's work. Rapid
+  // changes (e.g. scrolling a wheel) become one write. Offline the transaction fails; the changes
+  // stay on this device and are sent when the connection returns.
   const WRITE_DEBOUNCE_MS = 600;
   let writeTimer = null;
+  let syncing = null;
+  let syncAgain = false;
+  let inflightJson = null;
   function flushRemoteWrite() {
     clearTimeout(writeTimer);
     writeTimer = null;
     if (!currentUser || !remoteReady) return Promise.resolve();
-    return db.collection('users').doc(currentUser.uid).set(state)
-      .catch(err => { console.error('Firestore save failed:', err); showToast(t('syncFailed')); });
+    if (syncing) { syncAgain = true; return syncing; }
+    const uid = currentUser.uid;
+    const docRef = db.collection('users').doc(uid);
+    const sent = JSON.parse(JSON.stringify(state));
+    const base = baseJson === null ? null : JSON.parse(baseJson);
+    syncing = db.runTransaction(tx => tx.get(docRef).then(snap => {
+      if (!remoteReady || !currentUser || currentUser.uid !== uid) throw new Error('sync-stopped');
+      const remote = snap.exists ? normalizeState(snap.data()) : null;
+      const merged = remote ? mergeStates(base, sent, remote) : normalizeState(sent);
+      inflightJson = JSON.stringify(merged);
+      if (!remote || inflightJson !== JSON.stringify(remote)) tx.set(docRef, merged);
+      return merged;
+    }))
+      .then(merged => {
+        if (!currentUser || currentUser.uid !== uid) return;
+        const before = JSON.stringify(state);
+        const changedMeanwhile = before !== JSON.stringify(sent);
+        setBase(merged);
+        // Edits made while the transaction ran are carried over onto the merged result.
+        state = changedMeanwhile ? mergeStates(sent, state, merged) : merged;
+        saveLocal();
+        if (JSON.stringify(state) !== before) refreshAll();
+        if (changedMeanwhile) syncAgain = true;
+      })
+      .catch(err => {
+        if (err && (err.message === 'sync-stopped' || err.code === 'unavailable')) return;
+        console.error('Firestore save failed:', err);
+        showToast(t('syncFailed'));
+      })
+      .then(() => {
+        syncing = null;
+        inflightJson = null;
+        if (syncAgain) { syncAgain = false; return flushRemoteWrite(); }
+      });
+    return syncing;
   }
   function save() {
     state = normalizeState(state);
@@ -264,7 +349,13 @@
     clearTimeout(writeTimer);
     writeTimer = setTimeout(flushRemoteWrite, WRITE_DEBOUNCE_MS);
   }
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && writeTimer) flushRemoteWrite(); });
+  function retrySync() { if (currentUser && remoteReady && !writeTimer && !syncing && hasLocalChanges()) flushRemoteWrite(); }
+  window.addEventListener('online', retrySync);
+  setInterval(retrySync, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { if (writeTimer) flushRemoteWrite(); }
+    else retrySync();
+  });
   window.addEventListener('pagehide', () => { if (writeTimer) flushRemoteWrite(); });
 
   let toastTimer = null;
@@ -335,11 +426,14 @@
   function money(n) { return state.settings.currency + fmt(n); }
   function timeToMinutes(tm) { const [h,m] = tm.split(':').map(Number); return h*60+m; }
 
+  // An end time at or before the start time means the shift ends the next day. The next day is
+  // found on the calendar (not by adding 24h), so shifts on clock-change nights get their real length.
   function shiftRange(shift) {
-    const start = new Date(shift.date + 'T' + shift.startTime + ':00');
-    let end = new Date(shift.date + 'T' + shift.endTime + ':00');
-    if (end <= start) end = new Date(end.getTime() + 24*3600*1000);
-    return { start, end };
+    const [y, mo, d] = shift.date.split('-').map(Number);
+    const [sh, sm] = shift.startTime.split(':').map(Number);
+    const [eh, em] = shift.endTime.split(':').map(Number);
+    const nextDay = timeToMinutes(shift.endTime) <= timeToMinutes(shift.startTime) ? 1 : 0;
+    return { start: new Date(y, mo-1, d, sh, sm), end: new Date(y, mo-1, d + nextDay, eh, em) };
   }
 
   function windowDurationMinutes(settings) {
@@ -365,7 +459,9 @@
         const [sh, sm] = settings.weekendStartTime.split(':').map(Number);
         const winStart = new Date(cursor);
         winStart.setHours(sh, sm, 0, 0);
-        const winEnd = new Date(winStart.getTime() + durationMin*60000);
+        // The window ends at a wall-clock time a set number of days later (calendar math, DST-safe).
+        const endWall = sh*60 + sm + durationMin;
+        const winEnd = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + Math.floor(endWall/1440), Math.floor((endWall%1440)/60), endWall%60);
         const overlapStart = Math.max(start.getTime(), winStart.getTime());
         const overlapEnd = Math.min(end.getTime(), winEnd.getTime());
         if (overlapEnd > overlapStart) overlapMs += (overlapEnd - overlapStart);
@@ -846,15 +942,15 @@
   const BACKUP_KEEP_DAYS = 14;
   function dateStr(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function backupsRef(uid) { return db.collection('users').doc(uid).collection('backups'); }
-  function runDailyBackup(uid) {
+  function runDailyBackup(uid, data) {
     const today = todayStr();
     const flagKey = 'workTrackerBackup_' + uid;
     try { if (localStorage.getItem(flagKey) === today) return; } catch(e) {}
-    if (!state.shifts.length && !state.additions.length && !state.templates.length) return;
+    if (!data.shifts.length && !data.additions.length && !data.templates.length) return;
     const col = backupsRef(uid);
     col.doc(today).get().then(snap => {
       const writes = [];
-      if (!snap.exists) writes.push(col.doc(today).set({ data: state, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
+      if (!snap.exists) writes.push(col.doc(today).set({ data, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
       // Drop anything older than the retention window (covers a week of not opening the app).
       for (let i = BACKUP_KEEP_DAYS; i < BACKUP_KEEP_DAYS + 7; i++) {
         const d = new Date();
@@ -2356,14 +2452,17 @@
   $('signOutBtn').addEventListener('click', () => {
     $('signOutBtn').disabled = true;
     const timeout = new Promise(resolve => setTimeout(resolve, 2500));
-    Promise.race([flushRemoteWrite(), timeout])
-      .then(() => auth.signOut())
-      .catch(() => {})
-      .then(() => {
-        clearLocalCache();
-        return db.terminate().then(() => db.clearPersistence()).catch(() => {});
-      })
-      .then(() => location.reload());
+    Promise.race([flushRemoteWrite(), timeout]).then(() => {
+      // Changes not yet in the cloud (e.g. made offline) would be lost with this device's copy.
+      if (hasLocalChanges() && !confirm(t('signOutUnsynced'))) { $('signOutBtn').disabled = false; return; }
+      return auth.signOut()
+        .catch(() => {})
+        .then(() => {
+          clearLocalCache();
+          return db.terminate().then(() => db.clearPersistence()).catch(() => {});
+        })
+        .then(() => location.reload());
+    });
   });
 
   // Password changes and account deletion both require the current password again.
@@ -2444,6 +2543,7 @@
           if (firestoreUnsub) { firestoreUnsub(); firestoreUnsub = null; }
           clearTimeout(writeTimer);
           writeTimer = null;
+          syncAgain = false;
           remoteReady = false;
           return backupsRef(uid).get().then(snap => Promise.all(snap.docs.map(d => d.ref.delete())));
         })
@@ -2465,12 +2565,12 @@
   }
   $('deleteAccountBtn').addEventListener('click', openDeleteAccountSheet);
 
-  function applyRemoteState(data) {
-    const incoming = normalizeState(data);
-    if (JSON.stringify(incoming) === JSON.stringify(state)) return;
-    state = incoming;
+  function applyRemoteState(incoming) {
+    setBase(incoming);
+    const same = JSON.stringify(incoming) === JSON.stringify(state);
+    if (!same) state = incoming;
     saveLocal();
-    refreshAll();
+    if (!same) refreshAll();
   }
 
   // The launch screen stays until there's something real to show (the app with data, or the
@@ -2499,23 +2599,36 @@
     const docRef = db.collection('users').doc(user.uid);
     const owner = getCacheOwner();
     const localIsMine = !owner || owner === user.uid;
-    if (!localIsMine) { state = freshState(); refreshAll(); }
+    if (!localIsMine) { state = freshState(); setBase(null); refreshAll(); }
     let firstSnapshot = true;
     let backupChecked = false;
-    firestoreUnsub = docRef.onSnapshot(snap => {
+    let lastRemoteJson = null;
+    // Metadata changes are included so the moment the cached copy is confirmed by the server is
+    // seen even when the data didn't change (that's when changes made offline get sent).
+    firestoreUnsub = docRef.onSnapshot({ includeMetadataChanges: true }, snap => {
       if (firstSnapshot) { firstSnapshot = false; hideAuthScreen(); }
       if (snap.exists) {
         remoteReady = true;
-        // Ignore echoes of our own unconfirmed writes and anything arriving while a
-        // local change is still waiting to be sent, so edits are never overwritten.
-        if (!snap.metadata.hasPendingWrites && !writeTimer) applyRemoteState(snap.data());
+        // Only server-confirmed data counts (a cached copy can be older than this device's).
+        // While this device has unsent changes, the cloud copy is merged in by a sync instead
+        // of replacing them; a sync's own echo is recognised and skipped.
+        if (!snap.metadata.fromCache && !snap.metadata.hasPendingWrites) {
+          const remote = normalizeState(snap.data());
+          const remoteJson = JSON.stringify(remote);
+          const fresh = remoteJson !== lastRemoteJson;
+          lastRemoteJson = remoteJson;
+          if (syncing) { if (fresh && remoteJson !== inflightJson) syncAgain = true; }
+          else if (writeTimer) { /* the pending write merges it */ }
+          else if (hasLocalChanges()) flushRemoteWrite();
+          else if (fresh) applyRemoteState(remote);
+        }
         if (pendingAuthLang && !snap.metadata.fromCache) {
           const lang = pendingAuthLang;
           pendingAuthLang = null;
           if (state.settings.language !== lang) { state.settings.language = lang; save(); refreshAll(); }
         }
         // The day's backup is taken from server-confirmed data, before today's edits.
-        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid); }
+        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid, normalizeState(snap.data())); }
       } else if (!snap.metadata.fromCache) {
         // New account: seed it with this device's data only if that data belongs to this user.
         remoteReady = true;
