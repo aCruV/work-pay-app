@@ -659,8 +659,15 @@
     return out.length === 1 ? out + '׳' : out.slice(0, -1) + '״' + out.slice(-1);
   }
   const hebDateFmt = (() => { try { return new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return null; } })();
+  // Showing Hebrew dates is a per-device display choice: on by default in Hebrew, off in English,
+  // until the user flips the switch in Settings.
+  const HEB_DATES_KEY = 'workTrackerHebrewDates';
+  function showHebrewDates() {
+    try { const v = localStorage.getItem(HEB_DATES_KEY); if (v === '1') return true; if (v === '0') return false; } catch (e) {}
+    return getLang() === 'he';
+  }
   function hebrewDate(d) {
-    if (!hebDateFmt) return null;
+    if (!hebDateFmt || !showHebrewDates()) return null;
     const parts = {};
     hebDateFmt.formatToParts(d).forEach(p => { parts[p.type] = p.value; });
     const day = parseInt(parts.day, 10), year = parseInt(parts.year, 10);
@@ -686,7 +693,8 @@
   function renderCalendar() {
     const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
     const on = monthFilter !== 'all';
-    [cal, legend, heb].forEach(el => el.classList.toggle('hidden', !on));
+    [cal, legend].forEach(el => el.classList.toggle('hidden', !on));
+    heb.classList.toggle('hidden', !on || !showHebrewDates());
     if (!on) return;
     const [y, m] = monthFilter.split('-').map(Number);
     const first = new Date(y, m - 1, 1), daysIn = new Date(y, m, 0).getDate();
@@ -958,6 +966,7 @@
     $('setHolidayPercent').value = s.holidayPercent;
     $('setOtThreshold').value = s.overtimeThreshold;
     $('setOtPercent').value = s.overtimePercent;
+    $('setHebDates').checked = showHebrewDates();
   }
   // Invalid or out-of-range input (e.g. a negative rate) keeps the previous value instead of
   // being clamped, so a typo can never silently turn pay into 0.
@@ -983,6 +992,10 @@
     renderDataViews();
   }
   ['setCurrency','setRate','setWkPercent','setHolidayPercent','setOtThreshold','setOtPercent'].forEach(id => $(id).addEventListener('change', readSettingsForm));
+  $('setHebDates').addEventListener('change', () => {
+    try { localStorage.setItem(HEB_DATES_KEY, $('setHebDates').checked ? '1' : '0'); } catch (e) {}
+    renderDataViews();
+  });
 
   // On phones, hand the file to the Share sheet (a plain download is unreliable in
   // Home Screen web apps); on computers, download it.
