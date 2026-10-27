@@ -14,6 +14,11 @@
       document.documentElement.setAttribute('lang', 'he');
     }
   } catch (e) {}
+  // Light/Dark chosen in Settings, applied before first paint (Auto = follow the phone).
+  try {
+    var theme = localStorage.getItem('workTrackerTheme');
+    if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {}
   // The app always fits the screen: Safari ignores user-scalable=no for pinch, so pinch gestures are
   // cancelled here; double-tap zoom is turned off in CSS (touch-action: manipulation).
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (type) {

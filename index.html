@@ -49,8 +49,9 @@
     --ease-in-out: cubic-bezier(.645, .045, .355, 1);
     --ease-sheet: cubic-bezier(.32, .72, 0, 1);
   }
+  /* Appearance: Auto follows the phone; Settings can force Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0c1322;
       --card: #141d2e;
       --card2: #1b2639;
@@ -78,6 +79,34 @@
       --toast-bg: rgba(39,57,92,0.97);
       --toast-action: #c3d6ff;
     }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1322;
+    --card: #141d2e;
+    --card2: #1b2639;
+    --text: #f1f2f5;
+    --muted: #9ba1b0;
+    --sep: #26324a;
+    --accent: #86aaf0;
+    --on-accent: #0e1014;
+    --green: #4cc274;
+    --red: #ff6274;
+    --on-red: #1f0a0e;
+    --amber: #ffad4d;
+    --shab: #213456;
+    --shab-ink: #9fbdf5;
+    --heb: #9fbdf5;
+    --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 10px 24px -16px rgba(0,0,0,0.6);
+    --tabbar-bg: rgba(14,21,36,0.92);
+    --sheet-bg: #141d2e;
+    --track-off: #2a3650;
+    --press: rgba(255,255,255,0.07);
+    --red-tint: rgba(255,98,116,0.16);
+    --amber-tint: rgba(255,173,77,0.16);
+    --shab-edge: rgba(159,189,245,0.3);
+    --glow: rgba(0,0,0,0.6);
+    --toast-bg: rgba(39,57,92,0.97);
+    --toast-action: #c3d6ff;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   button, input, select, textarea { font-family: inherit; }
@@ -116,8 +145,6 @@
   [dir="rtl"] .balance { padding: 0 2px 14px 52px; }
   .balance .privacy-btn { top: 4px; inset-inline-end: 0; }
   .balance .balance-value { font-size: 40px; margin: 0 0 2px; line-height: 1.1; }
-  .balance-meta { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 2px; text-wrap: balance; }
-  .nowrap { white-space: nowrap; }
 
   .stat-list { margin-top: 4px; }
   .stat-val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -424,7 +451,7 @@
     <div class="splash-dots"><span></span><span></span><span></span></div>
   </div>
 </div>
-<div class="app money-hidden">
+<div class="app">
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="auth-screen loading" id="authScreen">
     <form class="auth-card" id="authForm" novalidate>
@@ -459,7 +486,6 @@
       <div class="balance">
         <button type="button" class="privacy-btn" id="moneyToggle" aria-label="Show amounts"></button>
         <div class="balance-value money-private" id="sumTotal">0</div>
-        <div class="balance-meta" id="sumMeta"></div>
         <div class="balance-sub money-private" id="sumSub"></div>
       </div>
       <div class="luach" id="summaryCalendar"></div>
@@ -531,6 +557,14 @@
           <div class="seg-toggle" id="languageToggle">
             <button class="seg-btn" data-lang="en">English</button>
             <button class="seg-btn" data-lang="he">עברית</button>
+          </div>
+        </div>
+        <div class="list-row">
+          <div class="rlabel" data-i18n="rowAppearance">Appearance</div>
+          <div class="seg-toggle" id="themeToggle">
+            <button class="seg-btn" data-theme-choice="auto" data-i18n="themeAuto">Auto</button>
+            <button class="seg-btn" data-theme-choice="light" data-i18n="themeLight">Light</button>
+            <button class="seg-btn" data-theme-choice="dark" data-i18n="themeDark">Dark</button>
           </div>
         </div>
         <div class="list-row">

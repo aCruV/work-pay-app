@@ -626,11 +626,6 @@
 
     countTo($('sumTotal'), workPay + otherIncome, money);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
-    // Each item stays whole, and a separator always wraps together with the item after it.
-    $('sumMeta').innerHTML = t('sumMeta').split(' · ').map((part, i) => `<span class="nowrap">${i ? '· ' : ''}${escapeHtml(part
-      .replace('{h}', hrsText(fmt(totalHours)))
-      .replace('{s}', shifts.length === 1 ? t('shiftsOne') : t('shiftsMany').replace('{n}', shifts.length))
-      .replace('{w}', hrsText(fmt(weekendHours))))}</span>`).join(' ');
     countTo($('statDays'), shifts.length, v => String(Math.round(v)));
     countTo($('statHours'), totalHours, fmt);
     countTo($('statWeekendHours'), weekendHours, fmt);
@@ -1901,7 +1896,9 @@
     $('wkNoWindowHint').classList.toggle('hidden', windowDurationMinutes(state.settings) !== 0);
   }
 
-  // ---- earnings privacy: blurred every time the app opens, eye button reveals ----
+  // ---- earnings privacy: amounts show by default; the eye button blurs them, and the choice is remembered on this device ----
+  const MONEY_HIDDEN_KEY = 'workTrackerMoneyHidden';
+  try { if (localStorage.getItem(MONEY_HIDDEN_KEY) === '1') document.querySelector('.app').classList.add('money-hidden'); } catch (e) {}
   function isMoneyHidden() { return document.querySelector('.app').classList.contains('money-hidden'); }
   function setMoneyHidden(hidden) {
     document.querySelector('.app').classList.toggle('money-hidden', hidden);
@@ -1910,7 +1907,25 @@
     btn.setAttribute('aria-label', t(hidden ? 'showAmounts' : 'hideAmounts'));
     btn.setAttribute('aria-pressed', String(!hidden));
   }
-  $('moneyToggle').addEventListener('click', () => setMoneyHidden(!isMoneyHidden()));
+  $('moneyToggle').addEventListener('click', () => {
+    const hidden = !isMoneyHidden();
+    setMoneyHidden(hidden);
+    try { localStorage.setItem(MONEY_HIDDEN_KEY, hidden ? '1' : '0'); } catch (e) {}
+  });
+
+  // ---- appearance: Auto (follow the phone), Light or Dark, remembered on this device ----
+  const THEME_KEY = 'workTrackerTheme';
+  function currentTheme() { try { const v = localStorage.getItem(THEME_KEY); return v === 'light' || v === 'dark' ? v : 'auto'; } catch (e) { return 'auto'; } }
+  function applyTheme(choice) {
+    if (choice === 'light' || choice === 'dark') document.documentElement.setAttribute('data-theme', choice);
+    else document.documentElement.removeAttribute('data-theme');
+    $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.themeChoice === choice));
+  }
+  $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
+    try { localStorage.setItem(THEME_KEY, b.dataset.themeChoice); } catch (e) {}
+    applyTheme(b.dataset.themeChoice);
+  }));
+  applyTheme(currentTheme());
 
   // ---- language ----
   function applyLanguage() {
