@@ -7,10 +7,13 @@
   const MINUTES = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
   const CATEGORY_KEYS = ['driving','cashback','bonus','reimbursement','other'];
   const SWIPE_W = 76;
-  const ICON_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
-  const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
-  const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-  const ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6A17.4 17.4 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
+  const ICON_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
+  const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
+  const ICON_CHEV_R = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  const ICON_CHEV_D = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  const ICON_CHEV_U = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
+  const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6A17.4 17.4 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
 
   function defaultState() {
     return {
@@ -466,11 +469,12 @@
     return { start: new Date(y, mo-1, d, sh, sm), end: new Date(y, mo-1, d + nextDay, eh, em) };
   }
 
+  // A window whose end equals its start has no length (no weekend bonus), not a whole week.
   function windowDurationMinutes(settings) {
     const startTotal = settings.weekendStartDow*1440 + timeToMinutes(settings.weekendStartTime);
     let endTotal = settings.weekendEndDow*1440 + timeToMinutes(settings.weekendEndTime);
     let duration = endTotal - startTotal;
-    if (duration <= 0) duration += 7*1440;
+    if (duration < 0) duration += 7*1440;
     return duration;
   }
 
@@ -528,7 +532,9 @@
       + otWindowHours*settings.rate*pctOtWindow/100;
     const basePay = totalHours*settings.rate;
     const windowHours = baseWindowHours + otWindowHours;
-    return { totalHours, windowHours, overtimeHours, pay, bonusPay: pay - basePay };
+    // Rounded once here, the way the rows show them, so every total (summary, goals, reports) adds up to the rows.
+    const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+    return { totalHours: r2(totalHours), windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)) };
   }
 
   function rateSummary(r) {
@@ -620,6 +626,11 @@
 
     countTo($('sumTotal'), workPay + otherIncome, money);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
+    // Each item stays whole, and a separator always wraps together with the item after it.
+    $('sumMeta').innerHTML = t('sumMeta').split(' · ').map((part, i) => `<span class="nowrap">${i ? '· ' : ''}${escapeHtml(part
+      .replace('{h}', hrsText(fmt(totalHours)))
+      .replace('{s}', shifts.length === 1 ? t('shiftsOne') : t('shiftsMany').replace('{n}', shifts.length))
+      .replace('{w}', hrsText(fmt(weekendHours))))}</span>`).join(' ');
     countTo($('statDays'), shifts.length, v => String(Math.round(v)));
     countTo($('statHours'), totalHours, fmt);
     countTo($('statWeekendHours'), weekendHours, fmt);
@@ -627,6 +638,116 @@
     countTo($('statBonusPay'), bonusPay, money);
     countTo($('statWorkPay'), workPay, money);
     countTo($('statOtherIncome'), otherIncome, money);
+    renderCalendar();
+  }
+
+  // ---- Luach: the month on the Israeli wall calendar ----
+  // Hebrew numerals for Hebrew dates: 15 → ט״ו, 22 → כ״ב, 5787 → תשפ״ז.
+  function hebNumeral(n) {
+    n %= 1000;
+    const ones = ['', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'];
+    const tens = ['', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'];
+    const hundreds = ['', 'ק', 'ר', 'ש', 'ת'];
+    let out = '';
+    let h = Math.floor(n / 100);
+    while (h > 4) { out += 'ת'; h -= 4; }
+    out += hundreds[h];
+    const rest = n % 100;
+    if (rest === 15) out += 'טו';
+    else if (rest === 16) out += 'טז';
+    else out += tens[Math.floor(rest / 10)] + ones[rest % 10];
+    return out.length === 1 ? out + '׳' : out.slice(0, -1) + '״' + out.slice(-1);
+  }
+  const hebDateFmt = (() => { try { return new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return null; } })();
+  function hebrewDate(d) {
+    if (!hebDateFmt) return null;
+    const parts = {};
+    hebDateFmt.formatToParts(d).forEach(p => { parts[p.type] = p.value; });
+    const day = parseInt(parts.day, 10), year = parseInt(parts.year, 10);
+    return { day: isNaN(day) ? parts.day : hebNumeral(day), month: parts.month, year: isNaN(year) ? parts.year : hebNumeral(year) };
+  }
+  // Parts of a weekday (minutes from midnight) inside the weekend-rate window, by wall clock.
+  function weekendBands(dow, settings) {
+    const ws = settings.weekendStartDow * 1440 + timeToMinutes(settings.weekendStartTime);
+    const we = ws + windowDurationMinutes(settings);
+    const bands = [];
+    [-10080, 0, 10080].forEach(wrap => {
+      const from = Math.max(ws + wrap, dow * 1440), to = Math.min(we + wrap, dow * 1440 + 1440);
+      if (to > from) bands.push([from - dow * 1440, to - dow * 1440]);
+    });
+    return bands;
+  }
+  function dowShort(dow) {
+    const he = getLang() === 'he';
+    return new Date(2026, 9, 4 + dow).toLocaleDateString(he ? 'he-IL' : 'en', { weekday: he ? 'narrow' : 'short' });
+  }
+  const shortHours = h => String(Math.round(h * 100) / 100);
+  function hrsText(v) { return getLang() === 'he' ? v + ' ' + t('hoursUnit') : v + t('hoursUnit'); }
+  function renderCalendar() {
+    const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
+    const on = monthFilter !== 'all';
+    [cal, legend, heb].forEach(el => el.classList.toggle('hidden', !on));
+    if (!on) return;
+    const [y, m] = monthFilter.split('-').map(Number);
+    const first = new Date(y, m - 1, 1), daysIn = new Date(y, m, 0).getDate();
+    const settings = state.settings;
+    const h1 = hebrewDate(first), h2 = hebrewDate(new Date(y, m - 1, daysIn));
+    heb.textContent = !h1 ? '' : h1.year !== h2.year ? `${h1.month} ${h1.year} – ${h2.month} ${h2.year}`
+      : h1.month === h2.month ? `${h1.month} ${h1.year}` : `${h1.month} – ${h2.month} ${h1.year}`;
+    const byDate = new Map();
+    state.shifts.forEach(x => { if (monthKey(x.date) === monthFilter) byDate.set(x.date, (byDate.get(x.date) || []).concat(x)); });
+    const today = todayStr();
+    const fullDays = [0, 1, 2, 3, 4, 5, 6].map(d => weekendBands(d, settings).some(([a, z]) => a === 0 && z === 1440));
+    let html = '<div class="luach-dow" aria-hidden="true">' + fullDays.map((full, d) => `<span${full ? ' class="shab"' : ''}>${escapeHtml(dowShort(d))}</span>`).join('') + '</div><div class="luach-grid">';
+    const lead = first.getDay();
+    const cells = Math.ceil((lead + daysIn) / 7) * 7;
+    for (let i = 0; i < cells; i++) {
+      const d = new Date(y, m - 1, 1 - lead + i);
+      const ds = dateStr(d), inMonth = d.getMonth() === m - 1;
+      const hd = hebrewDate(d);
+      const shade = weekendBands(d.getDay(), settings).map(([a, z]) => `<span class="luach-shade" style="top:${(a / 14.4).toFixed(2)}%;height:${((z - a) / 14.4).toFixed(2)}%"></span>`).join('');
+      const list = inMonth ? (byDate.get(ds) || []) : [];
+      let chip = '', label = formatDateDisplay(ds);
+      if (list.length) {
+        const calcs = list.map(calcShift);
+        const hours = calcs.reduce((sum, c) => sum + c.totalHours, 0);
+        const kind = list.some(x => x.isHoliday) ? ' holiday' : calcs.some(c => c.windowHours > 0) ? ' weekend' : '';
+        chip = `<span class="luach-hrs${kind}">${shortHours(hours)}</span>`;
+        label += ` · ${hrsText(fmt(hours))}`;
+      }
+      html += `<button type="button" class="luach-day${inMonth ? '' : ' out'}${ds === today ? ' today' : ''}${list.some(x => x.isHoliday) ? ' hol' : ''}" data-date="${ds}"${inMonth ? '' : ' disabled tabindex="-1"'} aria-label="${escapeHtml(label)}">${shade}`
+        + `<span class="luach-num"><span class="luach-d">${d.getDate()}</span>${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</span>${chip}</button>`;
+    }
+    cal.innerHTML = html + '</div>';
+    const windowText = windowDurationMinutes(settings) === 0 ? t('calNoWeekend')
+      : `${t('calLegendWeekend')} · ${dowShort(settings.weekendStartDow)} ${settings.weekendStartTime} – ${dowShort(settings.weekendEndDow)} ${settings.weekendEndTime}`;
+    legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span><span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`
+      + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`;
+  }
+  // Tapping a day: edit its shift, add one on that date, or show several in the Shifts list.
+  $('summaryCalendar').addEventListener('click', e => {
+    const cell = e.target.closest('.luach-day');
+    if (!cell || cell.disabled) return;
+    const list = state.shifts.filter(x => x.date === cell.dataset.date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    if (list.length === 1) openShiftSheet(list[0].id);
+    else if (!list.length) openShiftSheet(null, cell.dataset.date);
+    else showShiftsInList(list.map(x => x.id));
+  });
+  function showShiftsInList(ids) {
+    switchTab('shifts');
+    ids.forEach((id, i) => {
+      const wrap = shiftRowWrap(id);
+      if (!wrap) return;
+      if (i === 0) wrap.scrollIntoView({ block: 'center' });
+      wrap.classList.remove('row-flash');
+      void wrap.offsetWidth;
+      wrap.classList.add('row-flash');
+      wrap.addEventListener('animationend', function done(ev) {
+        if (ev.animationName !== 'rowFlash') return;
+        wrap.classList.remove('row-flash');
+        wrap.removeEventListener('animationend', done);
+      });
+    });
   }
 
   // ---- swipe to delete ----
@@ -635,6 +756,7 @@
     if (openSwipeRow && openSwipeRow !== rowEl) setRowOpen(openSwipeRow, false);
     const rtl = isRtl();
     if (open) {
+      rowEl.parentElement.classList.add('swiping');
       rowEl.style.transform = `translateX(${rtl ? SWIPE_W : -SWIPE_W}px)`;
       rowEl.classList.add('open');
       openSwipeRow = rowEl;
@@ -642,6 +764,7 @@
       rowEl.style.transform = 'translateX(0px)';
       rowEl.classList.remove('open');
       if (openSwipeRow === rowEl) openSwipeRow = null;
+      setTimeout(() => { if (!rowEl.classList.contains('open')) rowEl.parentElement.classList.remove('swiping'); }, 220);
     }
   }
   document.addEventListener('pointerdown', (e) => {
@@ -668,6 +791,7 @@
         if (!isHorizontal) { dragging = false; return; }
       }
       moved = true;
+      wrapEl.classList.add('swiping');
       const rtl = isRtl();
       const base = rowEl.classList.contains('open') ? (rtl ? SWIPE_W : -SWIPE_W) : 0;
       let x = base + dx;
@@ -703,20 +827,21 @@
     const html = shifts.map(s => {
       const c = calcShift(s);
       const dname = formatDateDisplay(s.date);
+      const hd = hebrewDate(new Date(s.date + 'T00:00:00'));
       let badges = overlapping.has(s.id) ? `<span class="badge badge-overlap">${t('badgeOverlap')}</span>` : '';
-      if (c.windowHours > 0) badges += `<span class="badge badge-weekend">${t('badgeWeekend')} ${fmt(c.windowHours)}h</span>`;
+      if (c.windowHours > 0) badges += `<span class="badge badge-weekend">${t('badgeWeekend')} ${hrsText(fmt(c.windowHours))}</span>`;
       if (s.isHoliday) badges += `<span class="badge badge-holiday">${t('badgeHoliday')}</span>`;
-      if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${fmt(c.overtimeHours)}h</span>`;
+      if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${hrsText(fmt(c.overtimeHours))}</span>`;
       return `<div class="entry-row-wrap">
         <button class="entry-swipe-delete">${ICON_TRASH}</button>
         <div class="entry-row" data-id="${escapeHtml(s.id)}" data-kind="shift">
           <div class="entry-main">
-            <div class="entry-date">${escapeHtml(dname)}</div>
-            <div class="entry-sub">${s.startTime}–${s.endTime} · ${fmt(c.totalHours)}h${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
+            <div class="entry-date">${escapeHtml(dname)}${hd ? `<span class="heb-date" lang="he">${escapeHtml(hd.day + ' ' + hd.month)}</span>` : ''}</div>
+            <div class="entry-sub">${s.startTime}–${s.endTime} · ${hrsText(fmt(c.totalHours))}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
             <div class="entry-badges">${badges}</div>
           </div>
           <div class="entry-amount">${escapeHtml(money(c.pay))}</div>
-          <div class="entry-chevron">›</div>
+          <div class="entry-chevron">${ICON_CHEV_R}</div>
         </div>
       </div>`;
     }).join('');
@@ -775,7 +900,11 @@
     save(); loadGoalForm(); renderGoals();
   }));
   $('goalTargetInput').addEventListener('change', () => {
-    state.settings.goalValue = num($('goalTargetInput').value, 0, 10000000, 0);
+    const raw = $('goalTargetInput').value.trim();
+    const n = parseFloat(raw);
+    if (raw === '') state.settings.goalValue = 0;
+    else if (Number.isFinite(n) && n >= 0 && n <= 10000000) state.settings.goalValue = n;
+    else showToast(t('settingsInvalidKept'));
     save(); loadGoalForm(); renderGoals();
   });
 
@@ -800,7 +929,7 @@
     if (target > 0) countTo($('goalPercent'), Math.round(pct*100), v => Math.round(v)+'%');
     else { $('goalPercent')._countValue = null; $('goalPercent').textContent = '—'; }
 
-    const fmtVal = v => type==='hours' ? fmt(v)+'h' : money(v);
+    const fmtVal = v => type==='hours' ? hrsText(fmt(v)) : money(v);
     $('goalAchievedLabel').textContent = target>0 ? `${fmtVal(achieved)} ${t('goalOf')} ${fmtVal(target)}` : fmtVal(achieved);
     if (target<=0) $('goalRemainingLabel').textContent = t('goalSetPrompt');
     else if (achieved>=target) $('goalRemainingLabel').textContent = t('goalReached');
@@ -817,6 +946,7 @@
   // ---- static i18n ----
   function applyStaticTranslations() {
     document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+    $('fab').setAttribute('aria-label', t('sheetNewShift'));
   }
 
   // ---- plain settings inputs ----
@@ -829,15 +959,25 @@
     $('setOtThreshold').value = s.overtimeThreshold;
     $('setOtPercent').value = s.overtimePercent;
   }
-  // Invalid or out-of-range input keeps the previous value instead of silently becoming 0.
+  // Invalid or out-of-range input (e.g. a negative rate) keeps the previous value instead of
+  // being clamped, so a typo can never silently turn pay into 0.
   function readSettingsForm() {
     const s = state.settings;
+    let rejected = false;
+    const field = (id, min, max, current) => {
+      const raw = $(id).value.trim();
+      const n = parseFloat(raw);
+      if (raw !== '' && Number.isFinite(n) && n >= min && n <= max) return n;
+      if (raw !== '' && n !== current) rejected = true;
+      return current;
+    };
     s.currency = $('setCurrency').value.trim().slice(0, LIMITS.currency) || s.currency;
-    s.rate = num($('setRate').value, 0, 100000, s.rate);
-    s.weekendPercent = num($('setWkPercent').value, 0, 1000, s.weekendPercent);
-    s.holidayPercent = num($('setHolidayPercent').value, 0, 1000, s.holidayPercent);
-    s.overtimeThreshold = num($('setOtThreshold').value, 0, 24, s.overtimeThreshold);
-    s.overtimePercent = num($('setOtPercent').value, 0, 1000, s.overtimePercent);
+    s.rate = field('setRate', 0, 100000, s.rate);
+    s.weekendPercent = field('setWkPercent', 0, 1000, s.weekendPercent);
+    s.holidayPercent = field('setHolidayPercent', 0, 1000, s.holidayPercent);
+    s.overtimeThreshold = field('setOtThreshold', 0, 24, s.overtimeThreshold);
+    s.overtimePercent = field('setOtPercent', 0, 1000, s.overtimePercent);
+    if (rejected) showToast(t('settingsInvalidKept'));
     save();
     loadSettingsForm();
     renderDataViews();
@@ -965,11 +1105,11 @@
     el.innerHTML = shown.map(([m, list]) => `
       <div class="list-row picker-row" data-rates-month="${m}">
         <div class="rlabel">${escapeHtml(monthLongLabel(m))}<span class="rsub">${escapeHtml(t('ratesListCount').replace('{n}', list.length))}</span></div>
-        <span class="entry-chevron">›</span>
+        <span class="entry-chevron">${ICON_CHEV_R}</span>
       </div>`).join('') + (hidden ? `
       <div class="list-row picker-row rates-toggle" id="ratesListToggle">
         <div class="rlabel" style="color:var(--accent);">${escapeHtml(ratesListExpanded ? t('ratesShowLess') : t('ratesShowMore').replace('{n}', hidden))}</div>
-        <span class="chev">${ratesListExpanded ? '⌃' : '⌄'}</span>
+        <span class="chev">${ratesListExpanded ? ICON_CHEV_U : ICON_CHEV_D}</span>
       </div>` : '');
     el.querySelectorAll('[data-rates-month]').forEach(row => row.addEventListener('click', () => applyCurrentRatesToMonth(row.dataset.ratesMonth)));
     if (hidden) $('ratesListToggle').addEventListener('click', () => { ratesListExpanded = !ratesListExpanded; renderApplyRatesList(); });
@@ -1037,7 +1177,7 @@
         <div class="list-group">${entries.map(e => `
           <div class="list-row picker-row" data-backup="${e.id}">
             <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', e.data.shifts.length))}</span></div>
-            <span class="entry-chevron">›</span>
+            <span class="entry-chevron">${ICON_CHEV_R}</span>
           </div>`).join('')}</div>`;
       $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
         const entry = entries.find(e => e.id === row.dataset.backup);
@@ -1501,7 +1641,7 @@
         const pay = list.reduce((sum, x) => sum + calcShift(x).pay, 0);
         return `<div class="list-row picker-row" data-report-month="${mo}">
           <div class="rlabel">${escapeHtml(monthLongLabel(mo))}<span class="rsub">${escapeHtml(t('reportShiftsCount').replace('{n}', list.length))} · ${escapeHtml(money(pay))}</span></div>
-          <span class="entry-chevron">›</span>
+          <span class="entry-chevron">${ICON_CHEV_R}</span>
         </div>`;
       }).join('')}</div>`;
     const syncFormat = () => {
@@ -1559,16 +1699,33 @@
   // ---- sheet plumbing ----
   const SHEET_CLOSE_MS = 200;
   let sheetCloseTimer = null;
+  // An open sheet owns one history entry, so the phone's or browser's Back closes the sheet
+  // instead of leaving the app. Closing it any other way removes that entry again.
+  let sheetHistory = false, ignoreNextPop = false;
+  const sheetIsOpen = () => { const o = $('sheetOverlay'); return !o.classList.contains('hidden') && !o.classList.contains('closing'); };
   function openSheetOverlay() {
     clearTimeout(sheetCloseTimer);
     $('sheetOverlay').classList.remove('hidden', 'closing');
+    if (!sheetHistory) { try { history.pushState({ sheet: true }, ''); sheetHistory = true; } catch (e) {} }
   }
+  window.addEventListener('popstate', () => {
+    if (ignoreNextPop) { ignoreNextPop = false; return; }
+    if (!sheetHistory) return;
+    sheetHistory = false;
+    if (sheetIsOpen()) closeSheetOverlay();
+  });
   function closeSheetOverlay() {
     const overlay = $('sheetOverlay');
     $('sheetSave').style.visibility = '';
     sheetMode = null;
     editingId = null;
     if (overlay.classList.contains('hidden') || overlay.classList.contains('closing')) return;
+    // Drop the sheet's history entry, unless another sheet opens straight away and reuses it.
+    setTimeout(() => {
+      if (sheetHistory && !sheetIsOpen()) { sheetHistory = false; ignoreNextPop = true; history.back(); }
+    }, 0);
+    // Keyboard focus leaves the sheet, so a second Enter can't press its button again.
+    if (overlay.contains(document.activeElement)) document.activeElement.blur();
     if (reduceMotion.matches) { overlay.classList.add('hidden'); return; }
     overlay.classList.add('closing');
     sheetCloseTimer = setTimeout(() => overlay.classList.add('hidden'), SHEET_CLOSE_MS);
@@ -1728,6 +1885,7 @@
     $('wkStartTimeValue').textContent = state.settings.weekendStartTime;
     $('wkEndDayValue').textContent = DOW_FULL[lang][state.settings.weekendEndDow];
     $('wkEndTimeValue').textContent = state.settings.weekendEndTime;
+    $('wkNoWindowHint').classList.toggle('hidden', windowDurationMinutes(state.settings) !== 0);
   }
 
   // ---- earnings privacy: blurred every time the app opens, eye button reveals ----
@@ -1808,7 +1966,7 @@
           <button type="button" class="tpl-move" data-move="-1" aria-label="${escapeHtml(t('moveUp'))}" ${i === 0 ? 'disabled' : ''}>${arrow('M6 15l6-6 6 6')}</button>
           <button type="button" class="tpl-move" data-move="1" aria-label="${escapeHtml(t('moveDown'))}" ${i === last ? 'disabled' : ''}>${arrow('M6 9l6 6 6-6')}</button>
         </div>` : ''}
-        <span class="entry-chevron">›</span>
+        <span class="entry-chevron">${ICON_CHEV_R}</span>
       </div>`).join('');
     el.querySelectorAll('[data-template-id]').forEach(row => {
       row.addEventListener('click', () => openTemplateSheet(row.dataset.templateId));
@@ -1849,7 +2007,7 @@
       </div>
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row picker-row" data-toggle="panelTplStart"><div class="rlabel" data-i18n="fieldStartTime">Start time</div><div><span class="picker-value" id="valTplStart"></span><span class="chev">⌄</span></div></div>
+          <div class="list-row picker-row" data-toggle="panelTplStart"><div class="rlabel" data-i18n="fieldStartTime">Start time</div><div><span class="picker-value" id="valTplStart"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
         </div>
         <div class="wheel-panel hidden" id="panelTplStart">
           <div class="wheel-fade-top"></div>
@@ -1859,7 +2017,7 @@
           <div class="wheel-fade-bottom"></div>
         </div>
         <div class="list-group" style="margin-top:10px;">
-          <div class="list-row picker-row" data-toggle="panelTplEnd"><div class="rlabel" data-i18n="fieldEndTime">End time</div><div><span class="picker-value" id="valTplEnd"></span><span class="chev">⌄</span></div></div>
+          <div class="list-row picker-row" data-toggle="panelTplEnd"><div class="rlabel" data-i18n="fieldEndTime">End time</div><div><span class="picker-value" id="valTplEnd"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
         </div>
         <div class="wheel-panel hidden" id="panelTplEnd">
           <div class="wheel-fade-top"></div>
@@ -1908,7 +2066,7 @@
       if (a.until) sub += ` · ${t('additionUntil').replace('{m}', monthLongLabel(a.until))}`;
       return `<div class="list-row picker-row${ended ? ' addition-ended' : ''}" data-addition="${escapeHtml(a.id)}">
         <div class="rlabel">${escapeHtml(categoryLabel(a.category))}<span class="rsub">${escapeHtml(sub)}</span></div>
-        <span class="entry-chevron">›</span>
+        <span class="entry-chevron">${ICON_CHEV_R}</span>
       </div>`;
     }).join('');
     el.querySelectorAll('[data-addition]').forEach(row => row.addEventListener('click', () => openAdditionSheet(row.dataset.addition)));
@@ -1979,13 +2137,13 @@
   }
 
   // ---- add/edit shift sheet ----
-  function openShiftSheet(id) {
+  function openShiftSheet(id, presetDate) {
     sheetMode = 'shift'; editingId = id;
     $('sheetSave').style.visibility = '';
     const shift = id ? state.shifts.find(s => s.id === id) : null;
     const defaultStart = nowTimeStr();
     formShift = {
-      date: shift ? shift.date : todayStr(),
+      date: shift ? shift.date : (presetDate || todayStr()),
       startTime: shift ? shift.startTime : defaultStart,
       endTime: shift ? shift.endTime : addHoursToTime(defaultStart, 8),
       rateId: shift ? shift.rateId : null
@@ -1994,7 +2152,7 @@
     $('sheetBody').innerHTML = `
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row picker-row" data-toggle="panelShiftDate"><div class="rlabel" data-i18n="fieldDate">Date</div><div><span class="picker-value" id="valShiftDate"></span><span class="chev">⌄</span></div></div>
+          <div class="list-row picker-row" data-toggle="panelShiftDate"><div class="rlabel" data-i18n="fieldDate">Date</div><div><span class="picker-value" id="valShiftDate"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
         </div>
         <div class="wheel-panel hidden" id="panelShiftDate">
           <div class="wheel-fade-top"></div>
@@ -2011,7 +2169,7 @@
       </div>
       <div class="field-group">
         <div class="list-group">
-          <div class="list-row picker-row" data-toggle="panelShiftStart"><div class="rlabel" data-i18n="fieldStartTime">Start time</div><div><span class="picker-value" id="valShiftStart"></span><span class="chev">⌄</span></div></div>
+          <div class="list-row picker-row" data-toggle="panelShiftStart"><div class="rlabel" data-i18n="fieldStartTime">Start time</div><div><span class="picker-value" id="valShiftStart"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
         </div>
         <div class="wheel-panel hidden" id="panelShiftStart">
           <div class="wheel-fade-top"></div>
@@ -2021,7 +2179,7 @@
           <div class="wheel-fade-bottom"></div>
         </div>
         <div class="list-group" style="margin-top:10px;">
-          <div class="list-row picker-row" data-toggle="panelShiftEnd"><div class="rlabel" data-i18n="fieldEndTime">End time</div><div><span class="picker-value" id="valShiftEnd"></span><span class="chev">⌄</span></div></div>
+          <div class="list-row picker-row" data-toggle="panelShiftEnd"><div class="rlabel" data-i18n="fieldEndTime">End time</div><div><span class="picker-value" id="valShiftEnd"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
         </div>
         <div class="wheel-panel hidden" id="panelShiftEnd">
           <div class="wheel-fade-top"></div>
@@ -2152,14 +2310,14 @@
       `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
     $('sheetBody').innerHTML = `
       <div class="week-nav">
-        <button type="button" class="week-nav-btn" id="weekPrevBtn" aria-label="${escapeHtml(t('weekPrev'))}" ${weekOffset <= -WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <button type="button" class="week-nav-btn" id="weekPrevBtn" aria-label="${escapeHtml(t('weekPrev'))}" ${weekOffset <= -WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
         <div class="week-nav-label">
           <div class="week-range">${escapeHtml(weekRangeLabel(start))}</div>
           ${weekOffset === 0
             ? `<div class="week-nav-sub">${escapeHtml(t('weekComing'))}</div>`
             : `<button type="button" class="week-nav-back" id="weekBackBtn">${escapeHtml(t('weekBackToComing'))}</button>`}
         </div>
-        <button type="button" class="week-nav-btn" id="weekNextBtn" aria-label="${escapeHtml(t('weekNext'))}" ${weekOffset >= WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+        <button type="button" class="week-nav-btn" id="weekNextBtn" aria-label="${escapeHtml(t('weekNext'))}" ${weekOffset >= WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
       </div>
       ${state.templates.length ? '' : `<div class="tpl-empty-hint" style="margin:0 2px 10px;">${escapeHtml(t('noTemplatesHint'))}</div>`}
       ${weekPlan.map((d, i) => {
@@ -2176,9 +2334,9 @@
             <button type="button" class="week-chip" data-mode="custom">${escapeHtml(t('weekCustom'))}</button>
           </div>
           <div class="week-custom hidden" id="weekCustom${i}">
-            <div class="list-group"><div class="list-row picker-row" data-toggle="weekStartPanel${i}"><div class="rlabel">${escapeHtml(t('fieldStartTime'))}</div><div><span class="picker-value" id="weekStartVal${i}"></span><span class="chev">⌄</span></div></div></div>
+            <div class="list-group"><div class="list-row picker-row" data-toggle="weekStartPanel${i}"><div class="rlabel">${escapeHtml(t('fieldStartTime'))}</div><div><span class="picker-value" id="weekStartVal${i}"></span><span class="chev">${ICON_CHEV_D}</span></div></div></div>
             ${wheelPanelHtml('weekStartPanel' + i)}
-            <div class="list-group"><div class="list-row picker-row" data-toggle="weekEndPanel${i}"><div class="rlabel">${escapeHtml(t('fieldEndTime'))}</div><div><span class="picker-value" id="weekEndVal${i}"></span><span class="chev">⌄</span></div></div></div>
+            <div class="list-group"><div class="list-row picker-row" data-toggle="weekEndPanel${i}"><div class="rlabel">${escapeHtml(t('fieldEndTime'))}</div><div><span class="picker-value" id="weekEndVal${i}"></span><span class="chev">${ICON_CHEV_D}</span></div></div></div>
             ${wheelPanelHtml('weekEndPanel' + i)}
           </div>
           <div class="week-holiday hidden" id="weekHoliday${i}">
@@ -2233,20 +2391,20 @@
     const existing = state.shifts.filter(s => s.date === d.date).sort((a, b) => a.startTime.localeCompare(b.startTime));
     const times = weekDayTimes(d);
     const same = !!times && times.start === times.end;
-    const clash = !!times && !same && !!findClash({ date: d.date, startTime: times.start, endTime: times.end }, null);
+    const clash = !!times && !!findClash({ date: d.date, startTime: times.start, endTime: times.end }, null);
     const parts = [];
     if (existing.length) parts.push(t('weekExisting').replace('{s}', existing.map(s => `${s.startTime}–${s.endTime}`).join(', ')));
-    if (same) parts.push(t('alertSameTimes'));
-    else if (clash) parts.push(t('weekClash'));
+    if (same) parts.push(t('week24h'));
+    if (clash) parts.push(t('weekClash'));
     const el = $('weekExisting' + i);
     el.textContent = parts.join(' · ');
     el.classList.toggle('hidden', !parts.length);
-    el.classList.toggle('clash', same || clash);
+    el.classList.toggle('clash', clash);
     updateWeekSaveBtn();
   }
 
   function weekPicks() {
-    return weekPlan.map(d => ({ d, times: weekDayTimes(d) })).filter(x => x.times && x.times.start !== x.times.end);
+    return weekPlan.map(d => ({ d, times: weekDayTimes(d) })).filter(x => x.times);
   }
   function updateWeekSaveBtn() {
     const btn = $('weekSaveBtn');
@@ -2280,7 +2438,7 @@
   $('sheetSave').addEventListener('click', () => {
     if (sheetMode === 'shift') {
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
-      if (formShift.startTime === formShift.endTime) { alert(t('alertSameTimes')); return; }
+      if (formShift.startTime === formShift.endTime && !confirm(t('confirm24h'))) return;
       if (!editingId && state.shifts.length >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
       const clash = findClash(formShift, editingId);
       if (clash && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(clash.date)).replace('{t}', `${clash.startTime}–${clash.endTime}`))) return;
@@ -2312,8 +2470,8 @@
       } else {
         const amount = parseFloat($('fAmount').value);
         const from = $('fFrom').value;
-        if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000 || !isValidMonth(from)) { alert(t('alertFillAddition')); return; }
         const value = Math.round(amount * 100) / 100;
+        if (!Number.isFinite(amount) || value <= 0 || amount > 10000000 || !isValidMonth(from)) { alert(t('alertFillAddition')); return; }
         if (existing) {
           existing.category = category;
           existing.from = from;
@@ -2336,7 +2494,6 @@
     } else if (sheetMode === 'template') {
       const name = $('fTplName').value.trim().slice(0, LIMITS.tplName);
       if (!name) { alert(t('alertFillTemplateName')); return; }
-      if (formTemplate.startTime === formTemplate.endTime) { alert(t('alertSameTimes')); return; }
       if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
       const tplObj = { id: editingId || genId(), name, startTime: formTemplate.startTime, endTime: formTemplate.endTime };
       if (editingId) {

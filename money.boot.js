@@ -14,6 +14,12 @@
       document.documentElement.setAttribute('lang', 'he');
     }
   } catch (e) {}
+  // The app always fits the screen: Safari ignores user-scalable=no for pinch, so pinch gestures are
+  // cancelled here; double-tap zoom is turned off in CSS (touch-action: manipulation).
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (type) {
+    document.addEventListener(type, function (e) { e.preventDefault(); }, { passive: false });
+  });
+  document.addEventListener('touchmove', function (e) { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
   // Offline support (see sw.js). Only on real web addresses, not when opened as a local file.
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
     window.addEventListener('load', function () {

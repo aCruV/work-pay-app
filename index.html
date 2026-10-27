@@ -13,21 +13,37 @@
 <title>Shifts Tracker</title>
 <script src="money.boot.js"></script>
 <style>
+  /* Luach: the Israeli wall calendar. Rubik for UI and numerals, Frank Ruhl Libre for Hebrew dates (self-hosted, OFL). */
+  @font-face { font-family: 'Rubik'; font-style: normal; font-weight: 400 800; font-display: swap; src: url(fonts/rubik-latin.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+  @font-face { font-family: 'Rubik'; font-style: normal; font-weight: 400 800; font-display: swap; src: url(fonts/rubik-hebrew.woff2) format('woff2'); unicode-range: U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F; }
+  @font-face { font-family: 'Frank Ruhl Libre'; font-style: normal; font-weight: 500 700; font-display: swap; src: url(fonts/frankruhl-hebrew.woff2) format('woff2'); unicode-range: U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F; }
   :root {
-    --bg: #f2f2f7;
+    --bg: #f3f4f7;
     --card: #ffffff;
-    --card2: #ffffff;
-    --text: #000000;
-    --muted: #8e8e93;
-    --sep: #e5e5ea;
-    --accent: #007aff;
-    --green: #34c759;
-    --red: #ff3b30;
-    --amber: #ff9500;
-    --tabbar-bg: rgba(249,249,249,0.94);
+    --card2: #f6f7f9;
+    --text: #1a1b1f;
+    --muted: #5d6170;
+    --sep: #e3e5eb;
+    --accent: #2f5da8;
+    --on-accent: #ffffff;
+    --green: #23884a;
+    --red: #d7263d;
+    --on-red: #ffffff;
+    --amber: #b05e00;
+    --shab: #e6edf7;
+    --shab-ink: #2f5da8;
+    --heb: #2f5da8;
+    --shadow: 0 1px 2px rgba(20,30,60,0.06), 0 10px 24px -16px rgba(20,30,60,0.25);
+    --tabbar-bg: rgba(250,250,252,0.92);
     --sheet-bg: #ffffff;
-    --track-off: #e9e9eb;
-    --press: rgba(0,0,0,0.06);
+    --track-off: #e7e9ee;
+    --press: rgba(26,27,31,0.06);
+    --red-tint: rgba(215,38,61,0.12);
+    --amber-tint: rgba(176,94,0,0.12);
+    --shab-edge: rgba(47,93,168,0.25);
+    --glow: rgba(20,40,90,0.5);
+    --toast-bg: rgba(26,27,31,0.95);
+    --toast-action: #9fbdf5;
     --ease-out: cubic-bezier(.23, 1, .32, 1);
     --ease-in: cubic-bezier(.55, 0, 1, .45);
     --ease-in-out: cubic-bezier(.645, .045, .355, 1);
@@ -35,24 +51,40 @@
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #000000;
-      --card: #1c1c1e;
-      --card2: #2c2c2e;
-      --text: #ffffff;
-      --muted: #98989d;
-      --sep: #38383a;
-      --accent: #0a84ff;
-      --tabbar-bg: rgba(28,28,30,0.92);
-      --sheet-bg: #1c1c1e;
-      --track-off: #39393d;
-      --press: rgba(255,255,255,0.08);
+      --bg: #0c1322;
+      --card: #141d2e;
+      --card2: #1b2639;
+      --text: #f1f2f5;
+      --muted: #9ba1b0;
+      --sep: #26324a;
+      --accent: #86aaf0;
+      --on-accent: #0e1014;
+      --green: #4cc274;
+      --red: #ff6274;
+      --on-red: #1f0a0e;
+      --amber: #ffad4d;
+      --shab: #213456;
+      --shab-ink: #9fbdf5;
+      --heb: #9fbdf5;
+      --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 10px 24px -16px rgba(0,0,0,0.6);
+      --tabbar-bg: rgba(14,21,36,0.92);
+      --sheet-bg: #141d2e;
+      --track-off: #2a3650;
+      --press: rgba(255,255,255,0.07);
+      --red-tint: rgba(255,98,116,0.16);
+      --amber-tint: rgba(255,173,77,0.16);
+      --shab-edge: rgba(159,189,245,0.3);
+      --glow: rgba(0,0,0,0.6);
+      --toast-bg: rgba(39,57,92,0.97);
+      --toast-action: #c3d6ff;
     }
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  button, input, select, textarea { font-family: inherit; }
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: manipulation; }
   body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: "Rubik", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     position: fixed;
@@ -62,37 +94,39 @@
     max-width: 480px; margin: 0 auto; height: 100%;
     position: relative; background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
   }
+  .content { scrollbar-width: thin; scrollbar-color: var(--sep) transparent; }
   .content { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
   .tab-page.hidden { display: none; }
-  .large-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 4px 0 14px; }
+  .large-title { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 14px; }
 
   .pills { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 16px; scrollbar-width: none; }
   .pills::-webkit-scrollbar { display: none; }
   .pill { flex: none; padding: 7px 14px; border-radius: 999px; background: var(--card); color: var(--text); font-size: 13px; font-weight: 600; border: none; white-space: nowrap; }
-  .pill.active { background: var(--accent); color: #fff; }
+  .pill.active { background: var(--accent); color: var(--on-accent); }
 
-  .balance-card { position: relative; background: var(--card); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
   .privacy-btn { position: absolute; top: 14px; inset-inline-end: 14px; width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--track-off); color: var(--text); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
   .privacy-btn svg { width: 19px; height: 19px; }
   .money-private { transition: filter .2s ease; }
   .money-hidden .money-private { filter: blur(9px); user-select: none; pointer-events: none; }
   .list-row.hidden { display: none; }
   .addition-ended .rlabel { opacity: 0.55; }
-  .balance-label { font-size: 12.5px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-  .balance-value { font-size: 34px; font-weight: 800; margin: 4px 0 4px; letter-spacing: -0.02em; }
+  .balance-value { font-size: 34px; font-weight: 800; margin: 4px 0 4px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .balance-sub { font-size: 13px; color: var(--muted); }
+  .balance { position: relative; padding: 0 52px 14px 2px; }
+  [dir="rtl"] .balance { padding: 0 2px 14px 52px; }
+  .balance .privacy-btn { top: 4px; inset-inline-end: 0; }
+  .balance .balance-value { font-size: 40px; margin: 0 0 2px; line-height: 1.1; }
+  .balance-meta { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 2px; text-wrap: balance; }
+  .nowrap { white-space: nowrap; }
 
-  .stat-grid-ios { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-  .stat-grid-ios .stat-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
-  .stat-card { background: var(--card); border-radius: 16px; padding: 14px; }
-  .stat-icon { color: var(--muted); margin-bottom: 8px; }
-  .stat-icon svg { width: 20px; height: 20px; }
-  .stat-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
-  .stat-value { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+  .stat-list { margin-top: 4px; }
+  .stat-val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   .section-header { font-size: 12.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 20px 4px 8px; }
   .section-header:first-child { margin-top: 0; }
   .section-footer { font-size: 12.5px; color: var(--muted); margin: 8px 6px 0; line-height: 1.4; }
+  .section-footer.hint-warn { color: var(--red); font-weight: 500; }
+  .section-footer.hidden { display: none; }
 
   .list-group { background: var(--card); border-radius: 14px; overflow: hidden; margin-bottom: 10px; }
   .list-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--sep); }
@@ -107,7 +141,10 @@
   .list-row input:focus, .list-row select:focus { outline: none; }
   .list-row.picker-row { cursor: pointer; }
   .picker-value { color: var(--accent); font-weight: 600; font-size: 15px; }
-  .chev { color: var(--muted); font-size: 12px; margin-inline-start: 4px; }
+  .chev { color: var(--muted); margin-inline-start: 4px; }
+  .ico-chev { width: 13px; height: 13px; vertical-align: -1px; }
+  .entry-chevron .ico-chev { width: 16px; height: 16px; transform: rotate(-90deg); vertical-align: middle; }
+  .ico-plus { width: 17px; height: 17px; vertical-align: -3px; margin-inline-end: 6px; }
 
   .entry-row-wrap { position: relative; overflow: hidden; border-bottom: 1px solid var(--sep); }
   .entry-row-wrap:last-child { border-bottom: none; }
@@ -116,6 +153,7 @@
     background: var(--red); color: #fff; border: none; display: flex; align-items: center; justify-content: center;
   }
   [dir="rtl"] .entry-swipe-delete { right: auto; left: 0; }
+  .entry-row-wrap:not(.swiping) .entry-swipe-delete { visibility: hidden; }
   .entry-swipe-delete svg { width: 19px; height: 19px; }
   .entry-row {
     position: relative; z-index: 1; background: var(--card);
@@ -124,20 +162,21 @@
   }
   .entry-main { flex: 1; min-width: 0; }
   .entry-date { font-size: 14.5px; font-weight: 700; }
-  .entry-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .entry-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
   .entry-badges { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
   .badge { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
-  .badge-weekend { background: rgba(0,122,255,0.12); color: var(--accent); }
-  .badge-holiday { background: rgba(255,59,48,0.12); color: var(--red); }
-  .badge-overtime { background: rgba(255,149,0,0.12); color: var(--amber); }
-  .badge-overlap { background: var(--red); color: #fff; }
+  .badge-weekend { background: var(--shab); color: var(--shab-ink); }
+  .badge-holiday { background: var(--red-tint); color: var(--red); }
+  .badge-overtime { background: var(--amber-tint); color: var(--amber); }
+  .badge-overlap { background: var(--red); color: var(--on-red); }
   .small-btn { flex: none; border: none; background: var(--track-off); color: var(--accent); font-size: 13px; font-weight: 600; padding: 7px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
   .small-btn.hidden { display: none; }
   .toast.has-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
   .toast.show.has-action { pointer-events: auto; }
-  .toast-action { flex: none; background: none; border: none; color: #4da3ff; font-size: 14px; font-weight: 700; padding: 4px 2px; cursor: pointer; }
-  .entry-amount { text-align: end; font-weight: 800; font-size: 15px; white-space: nowrap; }
-  .entry-chevron { color: var(--muted); font-size: 18px; }
+  .toast-action { flex: none; background: none; border: none; color: var(--toast-action); font-size: 14px; font-weight: 700; padding: 4px 2px; cursor: pointer; }
+  .entry-amount { text-align: end; font-weight: 700; font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .heb-date { font-family: "Frank Ruhl Libre", serif; font-weight: 500; font-size: 12.5px; color: var(--heb); margin-inline-start: 6px; }
+  .entry-chevron { color: var(--muted); display: inline-flex; }
   [dir="rtl"] .entry-chevron { transform: scaleX(-1); display: inline-block; }
   .empty-state { text-align: center; color: var(--muted); padding: 46px 20px; font-size: 14px; line-height: 1.5; }
   .empty-state .big { margin-bottom: 10px; }
@@ -146,45 +185,42 @@
   .switch { position: relative; width: 48px; height: 28px; flex: none; }
   .switch input { position: absolute; inset: 0; opacity: 0; z-index: 2; margin: 0; cursor: pointer; }
   .switch .track { position: absolute; inset: 0; background: var(--track-off); border-radius: 999px; transition: background .15s; }
-  .switch input:checked + .track { background: var(--green); }
+  .switch input:checked + .track { background: var(--accent); }
   .switch .thumb { position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; background: #fff; border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.25); transition: transform .15s; }
   .switch input:checked ~ .thumb { transform: translateX(20px); }
   [dir="rtl"] .switch .thumb { left: auto; right: 2px; }
   [dir="rtl"] .switch input:checked ~ .thumb { transform: translateX(-20px); }
 
   .btn-block { display: block; width: 100%; text-align: center; padding: 13px; border-radius: 14px; font-size: 15.5px; font-weight: 700; border: none; cursor: pointer; }
-  .btn-accent { background: var(--accent); color: #fff; }
+  .btn-accent { background: var(--accent); color: var(--on-accent); }
   .btn-plain { background: var(--card); color: var(--accent); }
   .btn-danger { background: var(--card); color: var(--red); }
   .btn-stack { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
   .btn-block:disabled { opacity: 0.4; cursor: default; }
   .btn-block:not(:disabled):active { opacity: 0.7; }
-  .erase-warning { background: rgba(255,59,48,0.1); color: var(--red); border-radius: 14px; padding: 14px; font-size: 14px; line-height: 1.45; margin-bottom: 16px; }
+  .erase-warning { background: var(--red-tint); color: var(--red); border-radius: 14px; padding: 14px; font-size: 14px; line-height: 1.45; margin-bottom: 16px; }
   .erase-warning strong { display: block; font-size: 15px; margin-bottom: 4px; }
 
-  .fab {
-    position: absolute; right: 20px; bottom: calc(96px + env(safe-area-inset-bottom));
-    width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #fff;
-    font-size: 28px; font-weight: 400; border: none; box-shadow: 0 4px 14px rgba(0,0,0,0.22);
-    z-index: 20; display: flex; align-items: center; justify-content: center; cursor: pointer;
-  }
-  [dir="rtl"] .fab { right: auto; left: 20px; }
-  .fab:active { transform: scale(0.93); }
-  .fab.hidden { display: none; }
+  .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .title-row .large-title { margin: 4px 0 0; }
+  .title-add { flex: none; width: 40px; height: 40px; margin-top: 4px; border-radius: 50%; border: none; padding: 0; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; cursor: pointer; box-shadow: 0 4px 12px -6px var(--glow); }
+  .title-add .ico-add { width: 22px; height: 22px; }
+  .title-add:active { transform: scale(0.93); }
+  .title-add.hidden { display: none; }
 
   .tabbar {
     position: relative; display: flex; background: var(--tabbar-bg);
     backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
     border-top: 0.5px solid var(--sep); padding: 8px 4px calc(8px + env(safe-area-inset-bottom)); z-index: 15;
   }
-  .tab-btn { flex: 1; background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--muted); font-size: 10px; font-weight: 600; padding: 4px 0; cursor: pointer; }
+  .tab-btn { flex: 1; background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; font-weight: 600; padding: 4px 0; cursor: pointer; }
   .tab-btn svg { width: 23px; height: 23px; }
   .tab-btn.active { color: var(--accent); }
 
   .sheet-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: flex-end; }
   .sheet-overlay::before { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
   .sheet-overlay.hidden { display: none; }
-  .sheet-overlay.closing { pointer-events: none; }
+  .sheet-overlay.closing .sheet { pointer-events: none; }
   .sheet { position: relative; background: var(--sheet-bg); width: 100%; max-height: 88%; border-radius: 20px 20px 0 0; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -4px 24px rgba(0,0,0,0.15); }
   .sheet-handle { width: 36px; height: 4px; background: var(--sep); border-radius: 999px; margin: 8px auto 4px; }
   .sheet-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 12px; border-bottom: 1px solid var(--sep); }
@@ -215,7 +251,7 @@
   /* generic segmented control */
   .seg-toggle { display: flex; background: var(--track-off); border-radius: 8px; padding: 2px; }
   .seg-btn { border: none; background: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
-  .seg-btn.active { background: var(--accent); color: #fff; }
+  .seg-btn.active { background: var(--accent); color: var(--on-accent); }
 
   /* shift templates */
   .template-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 4px; scrollbar-width: none; }
@@ -251,7 +287,7 @@
   .week-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .week-chip { border: none; background: var(--track-off); color: var(--text); font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 999px; cursor: pointer; }
   .week-chip-time { font-weight: 500; opacity: .7; font-size: 11.5px; }
-  .week-chip.active { background: var(--accent); color: #fff; }
+  .week-chip.active { background: var(--accent); color: var(--on-accent); }
   .week-chip.active .week-chip-time { opacity: .85; }
   .week-custom { margin-top: 10px; }
   .week-custom .list-group { border: 1px solid var(--sep); margin-bottom: 8px; }
@@ -303,7 +339,7 @@
   .auth-link { display: block; margin: 14px auto 0; background: none; border: none; color: var(--accent); font-size: 14px; cursor: pointer; }
   .auth-link.hidden { display: none; }
   #authSubmitBtn:disabled { opacity: 0.5; cursor: default; }
-  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: rgba(40,40,42,0.95); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
   .auth-field { display: block; border-bottom: 1px solid var(--sep); cursor: text; }
@@ -312,9 +348,39 @@
   .auth-field input:focus { outline: none; }
   .auth-field input::placeholder { color: var(--muted); }
 
+  /* ---- Luach: the month on the wall calendar; weekend-rate hours sit inside the shaded band ---- */
+  .heb-sub { font-family: "Frank Ruhl Libre", serif; font-weight: 700; font-size: 15px; color: var(--heb); margin: -10px 0 12px; min-height: 20px; }
+  .heb-sub.hidden, .luach.hidden, .luach-legend.hidden { display: none; }
+  .luach { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 8px; }
+  .luach-dow, .luach-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .luach-dow span { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 9px 0 7px; }
+  .luach-dow span.shab { background: var(--shab); color: var(--shab-ink); }
+  .luach-day { position: relative; height: 62px; margin: 0; border: 0; border-top: 1px solid var(--sep); border-inline-start: 1px solid var(--sep); border-radius: 0; background: none; padding: 5px 5px 0 6px; display: flex; flex-direction: column; align-items: stretch; text-align: start; color: var(--text); font: inherit; cursor: pointer; min-width: 0; }
+  .luach-day:nth-child(7n+1) { border-inline-start: 0; }
+  .luach-day:disabled { cursor: default; }
+  .luach-shade { position: absolute; left: 0; right: 0; background: var(--shab); pointer-events: none; }
+  .luach-num { position: relative; display: flex; justify-content: space-between; align-items: baseline; gap: 2px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .luach-heb { font-family: "Frank Ruhl Libre", serif; font-size: 11px; font-weight: 500; color: var(--heb); white-space: nowrap; }
+  .luach-day.out .luach-num, .luach-day.out .luach-heb { color: var(--muted); font-weight: 400; }
+  .luach-day.hol .luach-d { color: var(--red); }
+  .luach-day.today .luach-d { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 0 6px; margin-inline-start: -6px; }
+  .luach-hrs { position: relative; margin-top: auto; margin-bottom: 7px; align-self: flex-start; font-size: 11.5px; font-weight: 600; padding: 3px 6px; border-radius: 6px; background: var(--track-off); color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .luach-hrs.weekend { background: var(--accent); color: var(--on-accent); }
+  .luach-hrs.holiday { background: var(--red); color: var(--on-red); }
+  .luach-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 4px 16px; font-size: 12px; color: var(--muted); }
+  .luach-legend i, .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-inline-end: 6px; }
+  .luach-legend b { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 5px; border-radius: 5px; background: var(--track-off); color: var(--text); margin-inline-end: 5px; }
+  .swatch-shab, .luach-legend i.swatch-shab { background: var(--shab); box-shadow: inset 0 0 0 1px var(--shab-edge); }
+  .swatch-red { background: var(--red); }
+  .entry-row-wrap.row-flash .entry-row { animation: rowFlash 1.6s ease-out; }
+  @keyframes rowFlash { 0%, 30% { background-color: var(--shab); } }
+  ::selection { background: var(--shab); color: var(--text); }
+  input, textarea { caret-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   /* ---- motion: iOS-like timing; nothing here runs when the device asks for reduced motion ---- */
   .pill, .seg-btn, .week-chip, .tpl-chip-select, .small-btn, .privacy-btn, .tab-btn { transition: transform .12s ease-out, background-color .2s ease, color .2s ease; }
-  .btn-block, .week-nav-btn, .tpl-move, .fab { transition: transform .12s ease-out, opacity .15s ease; }
+  .btn-block, .week-nav-btn, .tpl-move, .title-add { transition: transform .12s ease-out, opacity .15s ease; }
   .list-row.picker-row { transition: background-color .25s ease; }
   .entry-row:active, .list-row.picker-row:active { background-color: var(--press); transition-duration: 0s; }
   .sheet-cancel:active, .sheet-save:active, .auth-link:active, .week-nav-back:active { opacity: .5; }
@@ -332,7 +398,7 @@
 
     .tab-page { animation: pageIn .26s var(--ease-out); }
     .tab-btn.active svg { animation: tabPop .34s var(--ease-out); }
-    .fab { animation: popIn .3s var(--ease-out); }
+    .title-add { animation: popIn .3s var(--ease-out); }
     .wheel-panel { animation: panelIn .22s var(--ease-out); }
     .entry-row-wrap.row-in { animation: rowIn .34s var(--ease-out) both; animation-delay: var(--row-delay, 0ms); }
   }
@@ -388,26 +454,29 @@
 
     <section class="tab-page" id="tab-summary">
       <div class="large-title" data-i18n="titleSummary">Summary</div>
+      <div class="heb-sub" id="summaryHebMonth" lang="he"></div>
       <div class="pills" id="summaryMonthPills"></div>
-      <div class="balance-card">
-        <div class="balance-label" data-i18n="totalEarnings">Total Earnings</div>
+      <div class="balance">
         <button type="button" class="privacy-btn" id="moneyToggle" aria-label="Show amounts"></button>
         <div class="balance-value money-private" id="sumTotal">0</div>
+        <div class="balance-meta" id="sumMeta"></div>
         <div class="balance-sub money-private" id="sumSub"></div>
       </div>
-      <div class="stat-grid-ios">
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg></div><div class="stat-label" data-i18n="statDays">Days Worked</div><div class="stat-value" id="statDays">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></div><div class="stat-label" data-i18n="statHours">Total Hours</div><div class="stat-value" id="statHours">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg></div><div class="stat-label" data-i18n="statWeekendHours">Weekend Hours</div><div class="stat-value" id="statWeekendHours">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v18"/><path d="M4 4h13l-2.5 4L17 12H4"/></svg></div><div class="stat-label" data-i18n="statHolidayHours">Holiday Hours</div><div class="stat-value" id="statHolidayHours">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-9"/><path d="M15 6h6v6"/></svg></div><div class="stat-label" data-i18n="statBonusPay">Bonus Pay</div><div class="stat-value" id="statBonusPay">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div><div class="stat-label" data-i18n="statWorkPay">Work Pay</div><div class="stat-value money-private" id="statWorkPay">0</div></div>
-        <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="16" cy="13" r="1.3" fill="currentColor" stroke="none"/></svg></div><div class="stat-label" data-i18n="statOtherIncome">Other Income</div><div class="stat-value" id="statOtherIncome">0</div></div>
+      <div class="luach" id="summaryCalendar"></div>
+      <div class="luach-legend" id="summaryCalendarLegend"></div>
+      <div class="list-group stat-list">
+        <div class="list-row"><div class="rlabel" data-i18n="statDays">Days Worked</div><div class="stat-val" id="statDays">0</div></div>
+        <div class="list-row"><div class="rlabel" data-i18n="statHours">Total Hours</div><div class="stat-val" id="statHours">0</div></div>
+        <div class="list-row"><div class="rlabel"><i class="swatch swatch-shab"></i><span data-i18n="statWeekendHours">Weekend Hours</span></div><div class="stat-val" id="statWeekendHours">0</div></div>
+        <div class="list-row"><div class="rlabel"><i class="swatch swatch-red"></i><span data-i18n="statHolidayHours">Holiday Hours</span></div><div class="stat-val" id="statHolidayHours">0</div></div>
+        <div class="list-row"><div class="rlabel" data-i18n="statBonusPay">Bonus Pay</div><div class="stat-val" id="statBonusPay">0</div></div>
+        <div class="list-row"><div class="rlabel" data-i18n="statWorkPay">Work Pay</div><div class="stat-val money-private" id="statWorkPay">0</div></div>
+        <div class="list-row"><div class="rlabel" data-i18n="statOtherIncome">Other Income</div><div class="stat-val" id="statOtherIncome">0</div></div>
       </div>
     </section>
 
     <section class="tab-page hidden" id="tab-shifts">
-      <div class="large-title" data-i18n="titleShifts">Shifts</div>
+      <div class="title-row"><div class="large-title" data-i18n="titleShifts">Shifts</div><button type="button" class="title-add" id="fab" aria-label="New Shift"><svg class="ico-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
       <div class="pills" id="shiftsMonthPills"></div>
       <div class="list-group" id="shiftsList"></div>
     </section>
@@ -483,7 +552,7 @@
       <div class="list-group">
         <div class="list-row picker-row" data-toggle="wkStartDayPanel">
           <div class="rlabel" data-i18n="rowStartDay">Start day</div>
-          <div><span class="picker-value" id="wkStartDayValue"></span><span class="chev">⌄</span></div>
+          <div><span class="picker-value" id="wkStartDayValue"></span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span></div>
         </div>
       </div>
       <div class="wheel-panel hidden" id="wkStartDayPanel">
@@ -496,7 +565,7 @@
       <div class="list-group">
         <div class="list-row picker-row" data-toggle="wkStartTimePanel">
           <div class="rlabel" data-i18n="rowStartTime">Start time</div>
-          <div><span class="picker-value" id="wkStartTimeValue"></span><span class="chev">⌄</span></div>
+          <div><span class="picker-value" id="wkStartTimeValue"></span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span></div>
         </div>
       </div>
       <div class="wheel-panel hidden" id="wkStartTimePanel">
@@ -510,7 +579,7 @@
       <div class="list-group">
         <div class="list-row picker-row" data-toggle="wkEndDayPanel">
           <div class="rlabel" data-i18n="rowEndDay">End day</div>
-          <div><span class="picker-value" id="wkEndDayValue"></span><span class="chev">⌄</span></div>
+          <div><span class="picker-value" id="wkEndDayValue"></span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span></div>
         </div>
       </div>
       <div class="wheel-panel hidden" id="wkEndDayPanel">
@@ -523,7 +592,7 @@
       <div class="list-group">
         <div class="list-row picker-row" data-toggle="wkEndTimePanel">
           <div class="rlabel" data-i18n="rowEndTime">End time</div>
-          <div><span class="picker-value" id="wkEndTimeValue"></span><span class="chev">⌄</span></div>
+          <div><span class="picker-value" id="wkEndTimeValue"></span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span></div>
         </div>
       </div>
       <div class="wheel-panel hidden" id="wkEndTimePanel">
@@ -541,6 +610,7 @@
         </div>
       </div>
       <div class="section-footer" data-i18n="footerWeekend">Any shift hours that fall inside this weekly window get the bonus %.</div>
+      <div class="section-footer hint-warn hidden" id="wkNoWindowHint" data-i18n="footerNoWeekend">Start and end are the same, so no hours get the weekend bonus.</div>
 
       <div class="section-header" data-i18n="sectionHolidays">Holidays</div>
       <div class="list-group">
@@ -570,12 +640,12 @@
 
       <div class="section-header" data-i18n="sectionAdditions">Monthly additions</div>
       <div class="list-group" id="additionsList"></div>
-      <button type="button" class="btn-plain btn-block" id="addAdditionBtn" style="margin-top:10px;">+ <span data-i18n="additionAddNew">New monthly addition</span></button>
+      <button type="button" class="btn-plain btn-block" id="addAdditionBtn" style="margin-top:10px;"><svg class="ico-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="additionAddNew">New monthly addition</span></button>
       <div class="section-footer" data-i18n="footerAdditions">Added automatically to every month in which you log at least one shift.</div>
 
       <div class="section-header" data-i18n="sectionTemplates">Shift Templates</div>
       <div class="list-group" id="templatesSettingsList"></div>
-      <button type="button" class="btn-plain btn-block" id="addTemplateBtn" style="margin-top:10px;">+ <span data-i18n="templateAddNew">New Template</span></button>
+      <button type="button" class="btn-plain btn-block" id="addTemplateBtn" style="margin-top:10px;"><svg class="ico-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="templateAddNew">New Template</span></button>
       <div class="section-footer" data-i18n="footerTemplates">Use the arrows to set the order templates appear in when you add a shift.</div>
 
       <div class="section-header" data-i18n="sectionData">Data</div>
@@ -594,23 +664,22 @@
 
   </div>
 
-  <button class="fab hidden" id="fab">+</button>
 
   <nav class="tabbar">
     <button class="tab-btn active" data-tab="summary">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
       <span data-i18n="tabSummary">Summary</span>
     </button>
     <button class="tab-btn" data-tab="shifts">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
       <span data-i18n="tabShifts">Shifts</span>
     </button>
     <button class="tab-btn" data-tab="goals">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
       <span data-i18n="tabGoals">Goals</span>
     </button>
     <button class="tab-btn" data-tab="settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       <span data-i18n="tabSettings">Settings</span>
     </button>
   </nav>
