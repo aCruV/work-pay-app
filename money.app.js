@@ -424,6 +424,36 @@
     return (Math.round((n + Number.EPSILON) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function money(n) { return state.settings.currency + fmt(n); }
+
+  // ---- motion ----
+  const reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+  // Numbers glide to their new value instead of jumping (first render and format-only changes are instant).
+  function countTo(el, value, format) {
+    const from = el._countValue;
+    el._countValue = value;
+    cancelAnimationFrame(el._countRaf);
+    if (typeof from !== 'number' || from === value || reduceMotion.matches || document.hidden) { el.textContent = format(value); return; }
+    const t0 = performance.now(), dur = 550;
+    const step = now => {
+      const p = Math.min(1, (now - t0) / dur);
+      el.textContent = format(p < 1 ? from + (value - from) * (1 - Math.pow(1 - p, 3)) : value);
+      if (p < 1) el._countRaf = requestAnimationFrame(step);
+    };
+    el._countRaf = requestAnimationFrame(step);
+  }
+  // A removed row folds away before the data changes.
+  function collapseRow(wrap, done) {
+    if (!wrap || !wrap.isConnected || reduceMotion.matches) { done(); return; }
+    wrap.style.height = wrap.offsetHeight + 'px';
+    void wrap.offsetHeight;
+    wrap.classList.add('removing');
+    wrap.style.height = '0px';
+    setTimeout(done, 240);
+  }
+  function shiftRowWrap(id) {
+    const row = Array.from(document.querySelectorAll('#shiftsList .entry-row')).find(r => r.dataset.id === id);
+    return row ? row.closest('.entry-row-wrap') : null;
+  }
   function timeToMinutes(tm) { const [h,m] = tm.split(':').map(Number); return h*60+m; }
 
   // An end time at or before the start time means the shift ends the next day. The next day is
@@ -588,15 +618,15 @@
     const months = monthFilter === 'all' ? allMonths() : [monthFilter];
     const otherIncome = months.reduce((sum, m) => sum + additionsTotal(m), 0);
 
-    $('sumTotal').textContent = money(workPay + otherIncome);
+    countTo($('sumTotal'), workPay + otherIncome, money);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
-    $('statDays').textContent = shifts.length;
-    $('statHours').textContent = fmt(totalHours);
-    $('statWeekendHours').textContent = fmt(weekendHours);
-    $('statHolidayHours').textContent = fmt(holidayHours);
-    $('statBonusPay').textContent = money(bonusPay);
-    $('statWorkPay').textContent = money(workPay);
-    $('statOtherIncome').textContent = money(otherIncome);
+    countTo($('statDays'), shifts.length, v => String(Math.round(v)));
+    countTo($('statHours'), totalHours, fmt);
+    countTo($('statWeekendHours'), weekendHours, fmt);
+    countTo($('statHolidayHours'), holidayHours, fmt);
+    countTo($('statBonusPay'), bonusPay, money);
+    countTo($('statWorkPay'), workPay, money);
+    countTo($('statOtherIncome'), otherIncome, money);
   }
 
   // ---- swipe to delete ----
@@ -692,6 +722,25 @@
     }).join('');
     $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList">${html}</div>`;
     attachRowHandlers($('shiftsList'));
+    animateNewRows(shifts);
+  }
+
+  // Rows not on screen before slide in; when the month changes the whole list cascades in.
+  let shownRowIds = null, shownRowsFilter = null;
+  function animateNewRows(shifts) {
+    const listChanged = shownRowsFilter !== monthFilter;
+    const before = shownRowIds;
+    shownRowIds = new Set(shifts.map(s => s.id));
+    shownRowsFilter = monthFilter;
+    if (reduceMotion.matches) return;
+    let n = 0;
+    $('shiftsList').querySelectorAll('.entry-row-wrap').forEach(wrap => {
+      const id = wrap.querySelector('.entry-row').dataset.id;
+      if (!listChanged && before && before.has(id)) return;
+      if (listChanged) wrap.style.setProperty('--row-delay', Math.min(n++, 10) * 28 + 'ms');
+      wrap.classList.add('row-in');
+      wrap.addEventListener('animationend', () => { wrap.classList.remove('row-in'); wrap.style.removeProperty('--row-delay'); }, { once: true });
+    });
   }
 
   function deleteShift(id) { state.shifts = state.shifts.filter(s => s.id !== id); save(); renderDataViews(); }
@@ -701,7 +750,7 @@
       const rowEl = wrap.querySelector('.entry-row');
       const id = rowEl.dataset.id;
       const kind = rowEl.dataset.kind;
-      attachSwipe(wrap, () => deleteShift(id));
+      attachSwipe(wrap, () => collapseRow(wrap, () => deleteShift(id)));
       rowEl.addEventListener('click', () => {
         if (rowEl.dataset.justSwiped) { delete rowEl.dataset.justSwiped; return; }
         openShiftSheet(id);
@@ -748,7 +797,8 @@
     ring.setAttribute('stroke-dasharray', CIRC);
     ring.setAttribute('stroke-dashoffset', CIRC*(1-pct));
     ring.style.stroke = (target>0 && achieved>=target) ? 'var(--green)' : 'var(--accent)';
-    $('goalPercent').textContent = target>0 ? Math.round(pct*100)+'%' : '—';
+    if (target > 0) countTo($('goalPercent'), Math.round(pct*100), v => Math.round(v)+'%');
+    else { $('goalPercent')._countValue = null; $('goalPercent').textContent = '—'; }
 
     const fmtVal = v => type==='hours' ? fmt(v)+'h' : money(v);
     $('goalAchievedLabel').textContent = target>0 ? `${fmtVal(achieved)} ${t('goalOf')} ${fmtVal(target)}` : fmtVal(achieved);
@@ -1507,12 +1557,21 @@
   });
 
   // ---- sheet plumbing ----
-  function openSheetOverlay() { $('sheetOverlay').classList.remove('hidden'); }
+  const SHEET_CLOSE_MS = 200;
+  let sheetCloseTimer = null;
+  function openSheetOverlay() {
+    clearTimeout(sheetCloseTimer);
+    $('sheetOverlay').classList.remove('hidden', 'closing');
+  }
   function closeSheetOverlay() {
-    $('sheetOverlay').classList.add('hidden');
+    const overlay = $('sheetOverlay');
     $('sheetSave').style.visibility = '';
     sheetMode = null;
     editingId = null;
+    if (overlay.classList.contains('hidden') || overlay.classList.contains('closing')) return;
+    if (reduceMotion.matches) { overlay.classList.add('hidden'); return; }
+    overlay.classList.add('closing');
+    sheetCloseTimer = setTimeout(() => overlay.classList.add('hidden'), SHEET_CLOSE_MS);
   }
   $('sheetCancel').addEventListener('click', closeSheetOverlay);
   $('sheetOverlay').addEventListener('click', (e) => { if (e.target === $('sheetOverlay')) closeSheetOverlay(); });
@@ -2012,8 +2071,8 @@
     $('fUseCurrentRates').addEventListener('click', () => { formShift.rateId = null; showRates(); });
     if (shift) $('fDelete').addEventListener('click', () => {
       if (!confirm(t('confirmDeleteShift'))) return;
-      deleteShift(id);
       closeSheetOverlay();
+      collapseRow(shiftRowWrap(id), () => deleteShift(id));
     });
     openSheetOverlay();
   }

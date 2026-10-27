@@ -27,6 +27,11 @@
     --tabbar-bg: rgba(249,249,249,0.94);
     --sheet-bg: #ffffff;
     --track-off: #e9e9eb;
+    --press: rgba(0,0,0,0.06);
+    --ease-out: cubic-bezier(.23, 1, .32, 1);
+    --ease-in: cubic-bezier(.55, 0, 1, .45);
+    --ease-in-out: cubic-bezier(.645, .045, .355, 1);
+    --ease-sheet: cubic-bezier(.32, .72, 0, 1);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -40,6 +45,7 @@
       --tabbar-bg: rgba(28,28,30,0.92);
       --sheet-bg: #1c1c1e;
       --track-off: #39393d;
+      --press: rgba(255,255,255,0.08);
     }
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -114,7 +120,7 @@
   .entry-row {
     position: relative; z-index: 1; background: var(--card);
     padding: 12px 14px; display: flex; gap: 10px; align-items: center;
-    touch-action: pan-y; transition: transform .2s ease;
+    touch-action: pan-y; transition: transform .2s ease, background-color .25s ease;
   }
   .entry-main { flex: 1; min-width: 0; }
   .entry-date { font-size: 14.5px; font-weight: 700; }
@@ -175,10 +181,11 @@
   .tab-btn svg { width: 23px; height: 23px; }
   .tab-btn.active { color: var(--accent); }
 
-  .sheet-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.4); z-index: 30; display: flex; align-items: flex-end; }
+  .sheet-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: flex-end; }
+  .sheet-overlay::before { content: ''; position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
   .sheet-overlay.hidden { display: none; }
-  .sheet { background: var(--sheet-bg); width: 100%; max-height: 88%; border-radius: 20px 20px 0 0; display: flex; flex-direction: column; animation: slideUp .22s ease-out; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -4px 24px rgba(0,0,0,0.15); }
-  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .sheet-overlay.closing { pointer-events: none; }
+  .sheet { position: relative; background: var(--sheet-bg); width: 100%; max-height: 88%; border-radius: 20px 20px 0 0; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -4px 24px rgba(0,0,0,0.15); }
   .sheet-handle { width: 36px; height: 4px; background: var(--sep); border-radius: 999px; margin: 8px auto 4px; }
   .sheet-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 12px; border-bottom: 1px solid var(--sep); }
   .sheet-title { font-size: 16px; font-weight: 700; }
@@ -261,7 +268,7 @@
   .goal-ring-card { background: var(--card); border-radius: 16px; padding: 26px 20px; display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 4px; }
   .goal-ring-wrap { position: relative; width: 176px; height: 176px; }
   .goal-ring-track { stroke: var(--track-off); }
-  .goal-ring-progress { stroke: var(--accent); transition: stroke-dashoffset .3s ease, stroke .3s ease; }
+  .goal-ring-progress { stroke: var(--accent); transition: stroke-dashoffset .6s var(--ease-out), stroke .3s ease; }
   .goal-ring-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
   .goal-percent { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
   .goal-achieved { font-size: 15px; font-weight: 700; margin-top: 10px; }
@@ -298,11 +305,49 @@
   #authSubmitBtn:disabled { opacity: 0.5; cursor: default; }
   .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: rgba(40,40,42,0.95); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
+  .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
   .auth-field { display: block; border-bottom: 1px solid var(--sep); cursor: text; }
   .auth-field:last-child { border-bottom: none; }
   .auth-field input { display: block; width: 100%; border: none; background: transparent; font-size: 16px; color: var(--text); padding: 14px; }
   .auth-field input:focus { outline: none; }
   .auth-field input::placeholder { color: var(--muted); }
+
+  /* ---- motion: iOS-like timing; nothing here runs when the device asks for reduced motion ---- */
+  .pill, .seg-btn, .week-chip, .tpl-chip-select, .small-btn, .privacy-btn, .tab-btn { transition: transform .12s ease-out, background-color .2s ease, color .2s ease; }
+  .btn-block, .week-nav-btn, .tpl-move, .fab { transition: transform .12s ease-out, opacity .15s ease; }
+  .list-row.picker-row { transition: background-color .25s ease; }
+  .entry-row:active, .list-row.picker-row:active { background-color: var(--press); transition-duration: 0s; }
+  .sheet-cancel:active, .sheet-save:active, .auth-link:active, .week-nav-back:active { opacity: .5; }
+  .entry-row-wrap.removing { overflow: hidden; opacity: 0; border-bottom-width: 0; transition: height .24s var(--ease-in-out), opacity .18s ease; }
+  @media (prefers-reduced-motion: no-preference) {
+    .pill:active, .seg-btn:active, .week-chip:active, .tpl-chip-select:active, .small-btn:active, .privacy-btn:active,
+    .week-nav-btn:not(:disabled):active, .tpl-move:not(:disabled):active { transform: scale(.94); }
+    .btn-block:not(:disabled):active { transform: scale(.98); }
+    .tab-btn:active svg { transform: scale(.88); }
+
+    .sheet { animation: sheetUp .34s var(--ease-sheet); }
+    .sheet-overlay::before { animation: fadeIn .3s ease-out; }
+    .sheet-overlay.closing .sheet { animation: sheetDown .2s var(--ease-in) forwards; }
+    .sheet-overlay.closing::before { animation: fadeOut .2s ease-in forwards; }
+
+    .tab-page { animation: pageIn .26s var(--ease-out); }
+    .tab-btn.active svg { animation: tabPop .34s var(--ease-out); }
+    .fab { animation: popIn .3s var(--ease-out); }
+    .wheel-panel { animation: panelIn .22s var(--ease-out); }
+    .entry-row-wrap.row-in { animation: rowIn .34s var(--ease-out) both; animation-delay: var(--row-delay, 0ms); }
+  }
+  @keyframes fadeIn { from { opacity: 0; } }
+  @keyframes fadeOut { to { opacity: 0; } }
+  @keyframes sheetUp { from { transform: translateY(100%); } }
+  @keyframes sheetDown { to { transform: translateY(100%); } }
+  @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes tabPop { 0% { transform: scale(.82); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.5); } }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(-6px); } }
+  @keyframes rowIn { from { opacity: 0; transform: translateY(10px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .entry-row-wrap.removing, .goal-ring-progress, .toast { transition: none; }
+  }
 </style>
 </head>
 <body>
