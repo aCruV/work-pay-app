@@ -403,6 +403,10 @@
   .luach-hrs { position: relative; margin-top: 3px; padding: 0 7px; border-radius: 999px; background: var(--cap); font-size: 12px; line-height: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .luach-hrs.weekend { background: var(--accent); color: var(--on-accent); }
   .luach-hrs.holiday { background: var(--red); color: var(--on-red); }
+  /* A green "worked" dot in every hours capsule; a thin ring keeps it visible on the blue and red ones. */
+  .luach-hrs, .luach-legend b { padding-inline-start: 5px; }
+  .luach-hrs::before, .luach-legend b::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-inline-end: 4px; vertical-align: 1px; }
+  .luach-hrs.weekend::before, .luach-hrs.holiday::before { box-shadow: 0 0 0 1.5px var(--on-accent); }
   .luach-heb { position: relative; margin-top: 1px; font-family: "Frank Ruhl Libre", serif; font-size: 10.5px; line-height: 12px; font-weight: 500; color: var(--heb); white-space: nowrap; }
   .luach-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 4px 16px; font-size: 12px; color: var(--muted); }
   .luach-legend i, .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-inline-end: 6px; }

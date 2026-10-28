@@ -30,7 +30,9 @@
         overtimePercent: 125,
         language: 'en',
         goalType: 'hours',
-        goalValue: 0
+        goalValue: 0,
+        goalHours: 0,
+        goalIncome: 0
       },
       rateSets: [],
       shifts: [],
@@ -113,16 +115,24 @@
   // Every piece of data from storage, Firestore or a backup file passes through here,
   // so the rest of the app can trust the shape and never renders unchecked values.
   const CUSTOM_PAY_MAX = 1000000;
+  const GOAL_MAX = { hours: 744, income: 10000000 };
   function isValidCustomPay(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= CUSTOM_PAY_MAX; }
   function normalizeState(raw) {
     const def = defaultState().settings;
     const src = raw && typeof raw === 'object' ? raw : {};
     const s = src.settings && typeof src.settings === 'object' ? src.settings : {};
+    const goalType = s.goalType === 'income' ? 'income' : 'hours';
+    const legacyGoal = num(s.goalValue, 0, GOAL_MAX.income, 0);
+    const goalHours = num(s.goalHours, 0, GOAL_MAX.hours, goalType === 'hours' ? Math.min(legacyGoal, GOAL_MAX.hours) : 0);
+    const goalIncome = num(s.goalIncome, 0, GOAL_MAX.income, goalType === 'income' ? legacyGoal : 0);
     const settings = Object.assign(ratesFrom(s, def), {
       currency: str(s.currency, LIMITS.currency).trim() || def.currency,
       language: s.language === 'he' ? 'he' : 'en',
-      goalType: s.goalType === 'income' ? 'income' : 'hours',
-      goalValue: num(s.goalValue, 0, 10000000, def.goalValue)
+      goalType: goalType,
+      // The hours goal and the income goal are kept separately; goalValue mirrors the active one
+      // (older app versions read it). A goal saved before the split belongs to the type it was set for.
+      goalValue: goalType === 'income' ? goalIncome : goalHours,
+      goalHours, goalIncome
     });
     const seen = new Set();
     const uniqueId = v => {
@@ -905,20 +915,24 @@
     el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => btn.addEventListener('click', () => selectMonth(btn.dataset.month)));
   }
+  const goalKey = () => state.settings.goalType === 'income' ? 'goalIncome' : 'goalHours';
   function loadGoalForm() {
-    $('goalTargetInput').value = state.settings.goalValue || '';
+    $('goalTargetInput').value = state.settings[goalKey()] || '';
     $('goalTypeToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.goaltype === (state.settings.goalType||'hours')));
   }
   $('goalTypeToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
     state.settings.goalType = b.dataset.goaltype;
+    state.settings.goalValue = state.settings[goalKey()] || 0;
     save(); loadGoalForm(); renderGoals();
   }));
   $('goalTargetInput').addEventListener('change', () => {
     const raw = $('goalTargetInput').value.trim();
     const n = parseFloat(raw);
-    if (raw === '') state.settings.goalValue = 0;
-    else if (Number.isFinite(n) && n >= 0 && n <= 10000000) state.settings.goalValue = n;
+    const max = GOAL_MAX[state.settings.goalType === 'income' ? 'income' : 'hours'];
+    if (raw === '') state.settings[goalKey()] = 0;
+    else if (Number.isFinite(n) && n >= 0 && n <= max) state.settings[goalKey()] = n;
     else showToast(t('settingsInvalidKept'));
+    state.settings.goalValue = state.settings[goalKey()] || 0;
     save(); loadGoalForm(); renderGoals();
   });
 
@@ -932,7 +946,7 @@
     const totalEarn = workPay + otherIncome;
 
     const type = state.settings.goalType || 'hours';
-    const target = state.settings.goalValue || 0;
+    const target = state.settings[goalKey()] || 0;
     const achieved = type === 'hours' ? totalHours : totalEarn;
     const pct = target > 0 ? Math.min(1, achieved/target) : 0;
     const CIRC = 2*Math.PI*52;
