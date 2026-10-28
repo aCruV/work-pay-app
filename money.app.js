@@ -650,13 +650,10 @@
   function renderSummary() {
     renderPills('summaryMonthPills');
     const shifts = filteredShifts();
-    let totalHours=0, weekendHours=0, holidayHours=0, bonusPay=0, workPay=0;
+    let totalHours=0, workPay=0;
     shifts.forEach(s => {
       const c = calcShift(s);
       totalHours += c.totalHours;
-      weekendHours += c.windowHours;
-      if (s.isHoliday && !c.custom) holidayHours += c.totalHours;
-      bonusPay += c.bonusPay;
       workPay += c.pay;
     });
     const months = monthFilter === 'all' ? allMonths() : [monthFilter];
@@ -664,13 +661,6 @@
 
     countTo($('sumTotal'), workPay + otherIncome, money);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
-    countTo($('statDays'), shifts.length, v => String(Math.round(v)));
-    countTo($('statHours'), totalHours, fmt);
-    countTo($('statWeekendHours'), weekendHours, fmt);
-    countTo($('statHolidayHours'), holidayHours, fmt);
-    countTo($('statBonusPay'), bonusPay, money);
-    countTo($('statWorkPay'), workPay, money);
-    countTo($('statOtherIncome'), otherIncome, money);
     renderCalendar();
     renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
   }
