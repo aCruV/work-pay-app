@@ -153,6 +153,11 @@
   .balance .balance-value { font-size: 40px; margin: 0 0 2px; line-height: 1.1; }
 
   .stat-list { margin-top: 4px; }
+  #payBreakdownWrap.hidden { display: none; }
+  #payBreakdownWrap .section-header { margin-top: 8px; }
+  .bd-list { margin-bottom: 16px; }
+  .bd-total .rlabel, .bd-total .stat-val { font-weight: 700; font-size: 17px; }
+  .bd-total { background: var(--card2); }
   .stat-val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   .section-header { font-size: 12.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 20px 4px 8px; }
@@ -504,6 +509,10 @@
       </div>
       <div class="luach" id="summaryCalendar"></div>
       <div class="luach-legend" id="summaryCalendarLegend"></div>
+      <div id="payBreakdownWrap" class="hidden">
+        <div class="section-header" data-i18n="bdTitle">How your pay adds up</div>
+        <div class="list-group bd-list" id="payBreakdown"></div>
+      </div>
       <div class="list-group stat-list">
         <div class="list-row"><div class="rlabel" data-i18n="statDays">Days Worked</div><div class="stat-val" id="statDays">0</div></div>
         <div class="list-row"><div class="rlabel" data-i18n="statHours">Total Hours</div><div class="stat-val" id="statHours">0</div></div>

@@ -551,8 +551,28 @@
     const windowHours = baseWindowHours + otWindowHours;
     // Rounded once here, the way the rows show them, so every total (summary, goals, reports) adds up to the rows.
     const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
-    if (isValidCustomPay(shift.customPay)) return { totalHours: r2(totalHours), windowHours: 0, overtimeHours: 0, pay: r2(shift.customPay), bonusPay: 0, custom: true };
-    return { totalHours: r2(totalHours), windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)) };
+    if (isValidCustomPay(shift.customPay)) {
+      return { totalHours: r2(totalHours), windowHours: 0, overtimeHours: 0, pay: r2(shift.customPay), bonusPay: 0, custom: true,
+        parts: [{ key: 'custom', hours: r2(totalHours), amount: r2(shift.customPay), pct: null }] };
+    }
+    // The pay split by kind of hour, for the "how your pay adds up" breakdown. Each part is rounded and
+    // any leftover agora/minute goes to the largest part, so the parts always add up to the shift's row.
+    const parts = [];
+    const part = (key, hours, pct) => { if (hours > 0) parts.push({ key, hours, pct, amount: hours * settings.rate * pct / 100 }); };
+    if (shift.isHoliday) {
+      part('holiday', baseRegularHours, pctBaseRegular); part('holiday', baseWindowHours, pctBaseWindow);
+      part('holiday', otRegularHours, pctOtRegular); part('holiday', otWindowHours, pctOtWindow);
+    } else {
+      part('regular', baseRegularHours, 100); part('weekend', baseWindowHours, pctBaseWindow);
+      part('overtime', otRegularHours, pctOtRegular); part('weekendOt', otWindowHours, pctOtWindow);
+    }
+    if (parts.length) {
+      parts.forEach(x => { x.hours = r2(x.hours); x.amount = r2(x.amount); });
+      const biggest = parts.reduce((a, b) => b.amount > a.amount ? b : a);
+      biggest.amount = r2(biggest.amount + r2(pay) - parts.reduce((t, x) => t + x.amount, 0));
+      biggest.hours = r2(biggest.hours + r2(totalHours) - parts.reduce((t, x) => t + x.hours, 0));
+    }
+    return { totalHours: r2(totalHours), windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)), parts };
   }
 
   function rateSummary(r) {
@@ -652,6 +672,47 @@
     countTo($('statWorkPay'), workPay, money);
     countTo($('statOtherIncome'), otherIncome, money);
     renderCalendar();
+    renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
+  }
+
+  // "How your pay adds up": one line per kind of pay that actually happened in the period
+  // (no empty lines), then a total of all the money and all the hours.
+  const BREAKDOWN_ORDER = ['regular', 'weekend', 'overtime', 'weekendOt', 'holiday', 'custom'];
+  function renderBreakdown(shifts, months, totalHours, totalMoney) {
+    const lines = {};
+    let customShifts = 0;
+    shifts.forEach(s => {
+      const c = calcShift(s);
+      if (c.custom) customShifts++;
+      c.parts.forEach(p => {
+        const l = lines[p.key] || (lines[p.key] = { hours: 0, amount: 0, pcts: new Set() });
+        l.hours += p.hours; l.amount += p.amount;
+        if (p.pct !== null) l.pcts.add(p.pct);
+      });
+    });
+    const additions = new Map();
+    months.forEach(m => additionsForMonth(m).forEach(({ a, amount }) => {
+      const cur = additions.get(a.id) || { label: categoryLabel(a.category), amount: 0, months: 0 };
+      cur.amount += amount; cur.months++;
+      additions.set(a.id, cur);
+    }));
+    const row = (label, sub, amount, cls = '') => `<div class="list-row bd-row${cls}"><div class="rlabel">${escapeHtml(label)}${sub ? `<span class="rsub">${escapeHtml(sub)}</span>` : ''}</div><div class="stat-val money-private">${escapeHtml(money(amount))}</div></div>`;
+    let html = '';
+    BREAKDOWN_ORDER.forEach(key => {
+      const l = lines[key];
+      if (!l || (l.hours <= 0 && l.amount <= 0)) return;
+      const hours = hrsText(fmt(Math.round(l.hours * 100) / 100));
+      const sub = key === 'custom'
+        ? (customShifts === 1 ? t('bdOneShift') : t('bdShifts').replace('{n}', customShifts)) + ' · ' + hours
+        : hours + (l.pcts.size === 1 ? ' · ' + [...l.pcts][0] + '%' : '');
+      html += row(t('bd_' + key), sub, Math.round(l.amount * 100) / 100);
+    });
+    additions.forEach(x => { if (x.amount > 0) html += row(x.label, months.length > 1 ? t('bdAdditionMonths').replace('{n}', x.months) : t('bdAddition'), x.amount); });
+    const wrap = $('payBreakdownWrap');
+    wrap.classList.toggle('hidden', !html);
+    if (!html) return;
+    html += row(t('bdTotal'), hrsText(fmt(totalHours)), totalMoney, ' bd-total');
+    $('payBreakdown').innerHTML = html;
   }
 
   // ---- Luach: the month on the Israeli wall calendar ----
