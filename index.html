@@ -48,6 +48,8 @@
     --ease-in: cubic-bezier(.55, 0, 1, .45);
     --ease-in-out: cubic-bezier(.645, .045, .355, 1);
     --ease-sheet: cubic-bezier(.32, .72, 0, 1);
+    --cap: #eceef2;
+    --today: #8a6500;
   }
   /* Appearance: Auto follows the phone; Settings can force Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
@@ -78,6 +80,8 @@
       --glow: rgba(0,0,0,0.6);
       --toast-bg: rgba(44,44,46,0.97);
       --toast-action: #9fbdf5;
+      --cap: #2c2c2e;
+      --today: #ffd23f;
     }
   }
   :root[data-theme="dark"] {
@@ -107,6 +111,8 @@
     --glow: rgba(0,0,0,0.6);
     --toast-bg: rgba(44,44,46,0.97);
     --toast-action: #9fbdf5;
+    --cap: #2c2c2e;
+    --today: #ffd23f;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   button, input, select, textarea { font-family: inherit; }
@@ -391,15 +397,15 @@
   .luach-day:not(:disabled):active .luach-d { background: var(--press); transition-duration: 0s; }
   .luach-day.out .luach-d, .luach-day.out .luach-heb { color: var(--muted); opacity: .55; }
   .luach-day.hol .luach-d { color: var(--red); font-weight: 700; }
-  .luach-day.today .luach-d { background: var(--accent); color: var(--on-accent); font-weight: 700; }
-  .luach-hrs { position: relative; margin-top: 2px; font-size: 12px; line-height: 14px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .luach-hrs::before, .luach-legend b::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-inline-end: 3px; vertical-align: 2px; }
-  .luach-hrs.weekend { color: var(--shab-ink); }
-  .luach-hrs.holiday { color: var(--red); }
+  .luach-day.today .luach-d { color: var(--today); font-weight: 800; }
+  .luach-day.today .luach-d::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 16px; height: 3px; margin-left: -8px; border-radius: 2px; background: var(--today); }
+  .luach-hrs { position: relative; margin-top: 2px; padding: 0 8px; border-radius: 999px; background: var(--cap); font-size: 13.5px; line-height: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .luach-hrs.weekend { background: var(--accent); color: var(--on-accent); }
+  .luach-hrs.holiday { background: var(--red); color: var(--on-red); }
   .luach-heb { position: relative; margin-top: 1px; font-family: "Frank Ruhl Libre", serif; font-size: 10.5px; line-height: 12px; font-weight: 500; color: var(--heb); white-space: nowrap; }
   .luach-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 4px 16px; font-size: 12px; color: var(--muted); }
   .luach-legend i, .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-inline-end: 6px; }
-  .luach-legend b { font-size: 12px; font-weight: 700; color: var(--muted); margin-inline-end: 4px; }
+  .luach-legend b { display: inline-block; font-size: 11px; line-height: 16px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--cap); color: var(--text); margin-inline-end: 5px; }
   .swatch-shab, .luach-legend i.swatch-shab { background: var(--shab); box-shadow: inset 0 0 0 1px var(--shab-edge); }
   .swatch-red { background: var(--red); }
   .entry-row-wrap.row-flash .entry-row { animation: rowFlash 1.6s ease-out; }
