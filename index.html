@@ -49,7 +49,7 @@
     --ease-in-out: cubic-bezier(.645, .045, .355, 1);
     --ease-sheet: cubic-bezier(.32, .72, 0, 1);
     --cap: #eceef2;
-    --today: #8a6500;
+    --today: #ffd23f;
   }
   /* Appearance: Auto follows the phone; Settings can force Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
@@ -394,12 +394,12 @@
   .luach.with-heb .luach-day { height: 70px; }
   .luach-day:disabled { cursor: default; }
   .luach-shade { position: absolute; left: 3px; right: 3px; border-radius: 10px; background: var(--shab); pointer-events: none; }
-  .luach-d { position: relative; display: block; width: 30px; height: 30px; line-height: 30px; text-align: center; border-radius: 50%; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; transition: background-color .2s ease; }
+  .luach-d { position: relative; display: block; width: 30px; height: 30px; line-height: 30px; text-align: center; border-radius: 50%; font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; transition: background-color .2s ease; }
   .luach-day:not(:disabled):active .luach-d { background: var(--press); transition-duration: 0s; }
   .luach-day.out .luach-d, .luach-day.out .luach-heb { color: var(--muted); opacity: .55; }
   .luach-day.hol .luach-d { color: var(--red); font-weight: 700; }
-  .luach-day.today .luach-d { color: var(--today); font-weight: 800; }
-  .luach-day.today .luach-d::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 16px; height: 3px; margin-left: -8px; border-radius: 2px; background: var(--today); }
+  .luach-day.today .luach-d { color: var(--text); font-weight: 800; }
+  .luach-day.today .luach-d::after { content: ""; position: absolute; left: 50%; bottom: 2px; width: 22px; height: 5px; margin-left: -11px; border-radius: 3px; background: var(--today); }
   .luach-hrs { position: relative; margin-top: 2px; padding: 0 8px; border-radius: 999px; background: var(--cap); font-size: 13.5px; line-height: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .luach-hrs.weekend { background: var(--accent); color: var(--on-accent); }
   .luach-hrs.holiday { background: var(--red); color: var(--on-red); }
