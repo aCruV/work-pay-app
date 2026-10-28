@@ -716,7 +716,8 @@
       const d = new Date(y, m - 1, 1 - lead + i);
       const ds = dateStr(d), inMonth = d.getMonth() === m - 1;
       const hd = hebrewDate(d);
-      const shade = weekendBands(d.getDay(), settings).map(([a, z]) => `<span class="luach-shade" style="top:${(a / 14.4).toFixed(2)}%;height:${((z - a) / 14.4).toFixed(2)}%"></span>`).join('');
+      // Only days fully inside the weekend window are shaded; part days stay plain (the legend gives the exact hours).
+      const shade = fullDays[d.getDay()] ? '<span class="luach-shade" style="top:0;height:100%"></span>' : '';
       const list = inMonth ? (byDate.get(ds) || []) : [];
       let chip = '', label = formatDateDisplay(ds);
       if (list.length) {
@@ -1218,9 +1219,15 @@
 
   // ---- new month while the app was open or suspended ----
   let lastSeenMonth = currentMonthStr();
+  let lastSeenDay = todayStr();
   function checkMonthRollover() {
     const now = currentMonthStr();
-    if (now === lastSeenMonth) return;
+    // A new day inside the same month only moves "today" on the calendar.
+    if (now === lastSeenMonth) {
+      if (todayStr() !== lastSeenDay) { lastSeenDay = todayStr(); renderSummary(); }
+      return;
+    }
+    lastSeenDay = todayStr();
     const previous = lastSeenMonth;
     lastSeenMonth = now;
     if (lastSpecificMonth === previous) lastSpecificMonth = now;
