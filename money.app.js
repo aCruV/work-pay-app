@@ -112,6 +112,8 @@
 
   // Every piece of data from storage, Firestore or a backup file passes through here,
   // so the rest of the app can trust the shape and never renders unchecked values.
+  const CUSTOM_PAY_MAX = 1000000;
+  function isValidCustomPay(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= CUSTOM_PAY_MAX; }
   function normalizeState(raw) {
     const def = defaultState().settings;
     const src = raw && typeof raw === 'object' ? raw : {};
@@ -152,11 +154,16 @@
     const shifts = list(src.shifts)
       .filter(x => x && isValidDate(x.date) && isValidTime(x.startTime) && isValidTime(x.endTime))
       .slice(0, LIMITS.shifts)
-      .map(x => ({
-        id: uniqueId(x.id), date: x.date, startTime: x.startTime, endTime: x.endTime,
-        isHoliday: x.isHoliday === true, note: str(x.note, LIMITS.note),
-        rateId: typeof x.rateId === 'string' && rateIdRemap.has(x.rateId) ? rateIdRemap.get(x.rateId) : fallbackRateId()
-      }));
+      .map(x => {
+        const shift = {
+          id: uniqueId(x.id), date: x.date, startTime: x.startTime, endTime: x.endTime,
+          isHoliday: x.isHoliday === true, note: str(x.note, LIMITS.note),
+          rateId: typeof x.rateId === 'string' && rateIdRemap.has(x.rateId) ? rateIdRemap.get(x.rateId) : fallbackRateId()
+        };
+        // A pay amount the user set by hand for this shift replaces the calculated pay.
+        if (isValidCustomPay(x.customPay)) shift.customPay = Math.round(x.customPay * 100) / 100;
+        return shift;
+      });
     const usedRateIds = new Set(shifts.map(x => x.rateId));
     // Monthly additions (e.g. driving expenses): each keeps an amount history so changing the
     // amount later never rewrites months that already passed. One-time incomes are no longer kept.
@@ -534,6 +541,7 @@
     const windowHours = baseWindowHours + otWindowHours;
     // Rounded once here, the way the rows show them, so every total (summary, goals, reports) adds up to the rows.
     const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+    if (isValidCustomPay(shift.customPay)) return { totalHours: r2(totalHours), windowHours: 0, overtimeHours: 0, pay: r2(shift.customPay), bonusPay: 0, custom: true };
     return { totalHours: r2(totalHours), windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)) };
   }
 
@@ -617,7 +625,7 @@
       const c = calcShift(s);
       totalHours += c.totalHours;
       weekendHours += c.windowHours;
-      if (s.isHoliday) holidayHours += c.totalHours;
+      if (s.isHoliday && !c.custom) holidayHours += c.totalHours;
       bonusPay += c.bonusPay;
       workPay += c.pay;
     });
@@ -714,7 +722,7 @@
       if (list.length) {
         const calcs = list.map(calcShift);
         const hours = calcs.reduce((sum, c) => sum + c.totalHours, 0);
-        const kind = list.some(x => x.isHoliday) ? ' holiday' : calcs.some(c => c.windowHours > 0) ? ' weekend' : '';
+        const kind = list.some((x, i) => x.isHoliday && !calcs[i].custom) ? ' holiday' : calcs.some(c => c.windowHours > 0) ? ' weekend' : '';
         chip = `<span class="luach-hrs${kind}">${shortHours(hours)}</span>`;
         label += ` · ${hrsText(fmt(hours))}`;
       }
@@ -834,7 +842,8 @@
       const hd = hebrewDate(new Date(s.date + 'T00:00:00'));
       let badges = overlapping.has(s.id) ? `<span class="badge badge-overlap">${t('badgeOverlap')}</span>` : '';
       if (c.windowHours > 0) badges += `<span class="badge badge-weekend">${t('badgeWeekend')} ${hrsText(fmt(c.windowHours))}</span>`;
-      if (s.isHoliday) badges += `<span class="badge badge-holiday">${t('badgeHoliday')}</span>`;
+      if (s.isHoliday && !c.custom) badges += `<span class="badge badge-holiday">${t('badgeHoliday')}</span>`;
+      if (c.custom) badges += `<span class="badge badge-custom">${t('badgeCustomPay')}</span>`;
       if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${hrsText(fmt(c.overtimeHours))}</span>`;
       return `<div class="entry-row-wrap">
         <button class="entry-swipe-delete">${ICON_TRASH}</button>
@@ -2229,6 +2238,18 @@
       <div class="field-group">
         <div class="list-group">
           <div class="list-row">
+            <div class="rlabel"><span data-i18n="fieldCustomPay">Custom pay</span><span class="rsub" data-i18n="fieldCustomPaySub">Enter this shift's pay yourself</span></div>
+            <label class="switch"><input type="checkbox" id="fCustomPayOn" ${shift && isValidCustomPay(shift.customPay) ? 'checked' : ''}><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="list-row ${shift && isValidCustomPay(shift.customPay) ? '' : 'hidden'}" id="fCustomPayRow">
+            <div class="rlabel" data-i18n="fieldCustomAmount">Amount</div>
+            <input type="number" id="fCustomPay" min="0" max="${CUSTOM_PAY_MAX}" step="0.01" inputmode="decimal" placeholder="${escapeHtml(state.settings.currency)}0.00" value="${shift && isValidCustomPay(shift.customPay) ? shift.customPay : ''}">
+          </div>
+        </div>
+      </div>
+      <div class="field-group">
+        <div class="list-group">
+          <div class="list-row">
             <div class="rlabel"><span data-i18n="fieldRates">Pay rates</span><span class="rsub" id="valShiftRates"></span></div>
             <button type="button" class="small-btn hidden" id="fUseCurrentRates" data-i18n="useCurrentRates">Use current rates</button>
           </div>
@@ -2256,6 +2277,11 @@
     };
     showRates();
     $('fUseCurrentRates').addEventListener('click', () => { formShift.rateId = null; showRates(); });
+    $('fCustomPayOn').addEventListener('change', () => {
+      const on = $('fCustomPayOn').checked;
+      $('fCustomPayRow').classList.toggle('hidden', !on);
+      if (on) $('fCustomPay').focus();
+    });
     if (shift) $('fDelete').addEventListener('click', () => {
       if (!confirm(t('confirmDeleteShift'))) return;
       closeSheetOverlay();
@@ -2469,6 +2495,13 @@
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
       if (formShift.startTime === formShift.endTime && !confirm(t('confirm24h'))) return;
       if (!editingId && state.shifts.length >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+      let customPay = null;
+      if ($('fCustomPayOn').checked) {
+        const raw = $('fCustomPay').value.trim();
+        const v = parseFloat(raw);
+        if (raw === '' || !isValidCustomPay(v)) { alert(t('alertCustomPay')); return; }
+        customPay = Math.round(v * 100) / 100;
+      }
       const clash = findClash(formShift, editingId);
       if (clash && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(clash.date)).replace('{t}', `${clash.startTime}–${clash.endTime}`))) return;
       const keepRate = formShift.rateId && state.rateSets.some(r => r.id === formShift.rateId);
@@ -2479,6 +2512,7 @@
         note: $('fNote').value.trim().slice(0, LIMITS.note),
         rateId: keepRate ? formShift.rateId : ensureCurrentRateSet()
       };
+      if (customPay !== null) shiftObj.customPay = customPay;
       if (editingId) {
         const idx = state.shifts.findIndex(s => s.id === editingId);
         if (idx !== -1) state.shifts[idx] = shiftObj;
