@@ -711,7 +711,9 @@
     const wrap = $('payBreakdownWrap');
     wrap.classList.toggle('hidden', !html);
     if (!html) return;
-    html += row(t('bdTotal'), hrsText(fmt(totalHours)), totalMoney, ' bd-total');
+    // Days worked counts calendar days, so two shifts on one day are one day.
+    const days = new Set(shifts.map(x => x.date)).size;
+    html += row(t('bdTotal'), hrsText(fmt(totalHours)) + ' · ' + (days === 1 ? t('bdOneDay') : t('bdDays').replace('{n}', days)), totalMoney, ' bd-total');
     $('payBreakdown').innerHTML = html;
   }
 
