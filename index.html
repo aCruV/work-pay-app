@@ -52,61 +52,61 @@
   /* Appearance: Auto follows the phone; Settings can force Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0c1322;
-      --card: #141d2e;
-      --card2: #1b2639;
-      --text: #f1f2f5;
-      --muted: #9ba1b0;
-      --sep: #26324a;
-      --accent: #86aaf0;
-      --on-accent: #0e1014;
+      --bg: #000000;
+      --card: #1c1c1e;
+      --card2: #2c2c2e;
+      --text: #f2f2f7;
+      --muted: #98989f;
+      --sep: #38383a;
+      --accent: #7fa5f0;
+      --on-accent: #0b0f1a;
       --green: #4cc274;
-      --red: #ff6274;
-      --on-red: #1f0a0e;
+      --red: #ff6b6b;
+      --on-red: #2a0808;
       --amber: #ffad4d;
-      --shab: #213456;
+      --shab: #232a36;
       --shab-ink: #9fbdf5;
       --heb: #9fbdf5;
-      --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 10px 24px -16px rgba(0,0,0,0.6);
-      --tabbar-bg: rgba(14,21,36,0.92);
-      --sheet-bg: #141d2e;
-      --track-off: #2a3650;
-      --press: rgba(255,255,255,0.07);
-      --red-tint: rgba(255,98,116,0.16);
+      --shadow: none;
+      --tabbar-bg: rgba(22,22,24,0.92);
+      --sheet-bg: #1c1c1e;
+      --track-off: #3a3a3c;
+      --press: rgba(255,255,255,0.1);
+      --red-tint: rgba(255,107,107,0.16);
       --amber-tint: rgba(255,173,77,0.16);
       --shab-edge: rgba(159,189,245,0.3);
       --glow: rgba(0,0,0,0.6);
-      --toast-bg: rgba(39,57,92,0.97);
-      --toast-action: #c3d6ff;
+      --toast-bg: rgba(44,44,46,0.97);
+      --toast-action: #9fbdf5;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0c1322;
-    --card: #141d2e;
-    --card2: #1b2639;
-    --text: #f1f2f5;
-    --muted: #9ba1b0;
-    --sep: #26324a;
-    --accent: #86aaf0;
-    --on-accent: #0e1014;
+    --bg: #000000;
+    --card: #1c1c1e;
+    --card2: #2c2c2e;
+    --text: #f2f2f7;
+    --muted: #98989f;
+    --sep: #38383a;
+    --accent: #7fa5f0;
+    --on-accent: #0b0f1a;
     --green: #4cc274;
-    --red: #ff6274;
-    --on-red: #1f0a0e;
+    --red: #ff6b6b;
+    --on-red: #2a0808;
     --amber: #ffad4d;
-    --shab: #213456;
+    --shab: #232a36;
     --shab-ink: #9fbdf5;
     --heb: #9fbdf5;
-    --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 10px 24px -16px rgba(0,0,0,0.6);
-    --tabbar-bg: rgba(14,21,36,0.92);
-    --sheet-bg: #141d2e;
-    --track-off: #2a3650;
-    --press: rgba(255,255,255,0.07);
-    --red-tint: rgba(255,98,116,0.16);
+    --shadow: none;
+    --tabbar-bg: rgba(22,22,24,0.92);
+    --sheet-bg: #1c1c1e;
+    --track-off: #3a3a3c;
+    --press: rgba(255,255,255,0.1);
+    --red-tint: rgba(255,107,107,0.16);
     --amber-tint: rgba(255,173,77,0.16);
     --shab-edge: rgba(159,189,245,0.3);
     --glow: rgba(0,0,0,0.6);
-    --toast-bg: rgba(39,57,92,0.97);
-    --toast-action: #c3d6ff;
+    --toast-bg: rgba(44,44,46,0.97);
+    --toast-action: #9fbdf5;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   button, input, select, textarea { font-family: inherit; }
@@ -378,25 +378,28 @@
   /* ---- Luach: the month on the wall calendar; weekend-rate hours sit inside the shaded band ---- */
   .heb-sub { font-family: "Frank Ruhl Libre", serif; font-weight: 700; font-size: 15px; color: var(--heb); margin: -10px 0 12px; min-height: 20px; }
   .heb-sub.hidden, .luach.hidden, .luach-legend.hidden { display: none; }
-  .luach { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 8px; }
+  .luach { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 8px; padding: 4px 4px 10px; }
   .luach-dow, .luach-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
-  .luach-dow span { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 9px 0 7px; }
-  .luach-dow span.shab { background: var(--shab); color: var(--shab-ink); }
-  .luach-day { position: relative; height: 62px; margin: 0; border: 0; border-top: 1px solid var(--sep); border-inline-start: 1px solid var(--sep); border-radius: 0; background: none; padding: 5px 5px 0 6px; display: flex; flex-direction: column; align-items: stretch; text-align: start; color: var(--text); font: inherit; cursor: pointer; min-width: 0; }
-  .luach-day:nth-child(7n+1) { border-inline-start: 0; }
+  .luach-grid { row-gap: 2px; }
+  .luach-dow span { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 7px 0 5px; }
+  .luach-dow span.shab { color: var(--shab-ink); }
+  .luach-day { position: relative; height: 60px; margin: 0; border: 0; border-radius: 10px; background: none; padding: 5px 0 0; display: flex; flex-direction: column; align-items: center; color: var(--text); font: inherit; cursor: pointer; min-width: 0; }
+  .luach.with-heb .luach-day { height: 70px; }
   .luach-day:disabled { cursor: default; }
-  .luach-shade { position: absolute; left: 0; right: 0; background: var(--shab); pointer-events: none; }
-  .luach-num { position: relative; display: flex; justify-content: space-between; align-items: baseline; gap: 2px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .luach-heb { font-family: "Frank Ruhl Libre", serif; font-size: 11px; font-weight: 500; color: var(--heb); white-space: nowrap; }
-  .luach-day.out .luach-num, .luach-day.out .luach-heb { color: var(--muted); font-weight: 400; }
-  .luach-day.hol .luach-d { color: var(--red); }
-  .luach-day.today .luach-d { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 0 6px; margin-inline-start: -6px; }
-  .luach-hrs { position: relative; margin-top: auto; margin-bottom: 7px; align-self: flex-start; font-size: 11.5px; font-weight: 600; padding: 3px 6px; border-radius: 6px; background: var(--track-off); color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .luach-hrs.weekend { background: var(--accent); color: var(--on-accent); }
-  .luach-hrs.holiday { background: var(--red); color: var(--on-red); }
+  .luach-shade { position: absolute; left: 3px; right: 3px; border-radius: 10px; background: var(--shab); pointer-events: none; }
+  .luach-d { position: relative; display: block; width: 30px; height: 30px; line-height: 30px; text-align: center; border-radius: 50%; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; transition: background-color .2s ease; }
+  .luach-day:not(:disabled):active .luach-d { background: var(--press); transition-duration: 0s; }
+  .luach-day.out .luach-d, .luach-day.out .luach-heb { color: var(--muted); opacity: .55; }
+  .luach-day.hol .luach-d { color: var(--red); font-weight: 700; }
+  .luach-day.today .luach-d { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .luach-hrs { position: relative; margin-top: 2px; font-size: 12px; line-height: 14px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .luach-hrs::before, .luach-legend b::before { content: ""; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-inline-end: 3px; vertical-align: 2px; }
+  .luach-hrs.weekend { color: var(--shab-ink); }
+  .luach-hrs.holiday { color: var(--red); }
+  .luach-heb { position: relative; margin-top: 1px; font-family: "Frank Ruhl Libre", serif; font-size: 10.5px; line-height: 12px; font-weight: 500; color: var(--heb); white-space: nowrap; }
   .luach-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 4px 16px; font-size: 12px; color: var(--muted); }
   .luach-legend i, .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-inline-end: 6px; }
-  .luach-legend b { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 5px; border-radius: 5px; background: var(--track-off); color: var(--text); margin-inline-end: 5px; }
+  .luach-legend b { font-size: 12px; font-weight: 700; color: var(--muted); margin-inline-end: 4px; }
   .swatch-shab, .luach-legend i.swatch-shab { background: var(--shab); box-shadow: inset 0 0 0 1px var(--shab-edge); }
   .swatch-red { background: var(--red); }
   .entry-row-wrap.row-flash .entry-row { animation: rowFlash 1.6s ease-out; }

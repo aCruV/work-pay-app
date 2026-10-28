@@ -719,9 +719,10 @@
         label += ` · ${hrsText(fmt(hours))}`;
       }
       html += `<button type="button" class="luach-day${inMonth ? '' : ' out'}${ds === today ? ' today' : ''}${list.some(x => x.isHoliday) ? ' hol' : ''}" data-date="${ds}"${inMonth ? '' : ' disabled tabindex="-1"'} aria-label="${escapeHtml(label)}">${shade}`
-        + `<span class="luach-num"><span class="luach-d">${d.getDate()}</span>${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</span>${chip}</button>`;
+        + `<span class="luach-d">${d.getDate()}</span>${chip}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
     }
     cal.innerHTML = html + '</div>';
+    cal.classList.toggle('with-heb', showHebrewDates());
     const windowText = windowDurationMinutes(settings) === 0 ? t('calNoWeekend')
       : `${t('calLegendWeekend')} · ${dowShort(settings.weekendStartDow)} ${settings.weekendStartTime} – ${dowShort(settings.weekendEndDow)} ${settings.weekendEndTime}`;
     legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span><span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`
