@@ -6,9 +6,7 @@
   const HOURS = Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
   const MINUTES = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
   const CATEGORY_KEYS = ['driving','cashback','bonus','reimbursement','other'];
-  const SWIPE_W = 76;
   const ICON_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
-  const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
   const ICON_CHEV_R = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
   const ICON_CHEV_D = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
   const ICON_CHEV_U = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
@@ -438,7 +436,6 @@
   let formShift = {};
   let formIncome = {};
   let formTemplate = {};
-  let openSwipeRow = null;
 
   function fmt(n) {
     return (Math.round((n + Number.EPSILON) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -814,19 +811,18 @@
     else if (!list.length) openShiftSheet(null, cell.dataset.date);
     else showShiftsInList(list.map(x => x.id));
   });
-  // Swiping sideways on the Summary page steps through the month pills: the months that have
-  // shifts (plus this month), oldest to newest, then All time. Mirrored in Hebrew. The calendar
-  // follows the finger and slides; the pills row keeps its own sideways scroll.
+  // Swiping the calendar sideways steps through the months that have shifts (plus this month);
+  // All time is picked from its pill. Mirrored in Hebrew. Elsewhere a sideways swipe changes tab.
   (() => {
-    const page = $('tab-summary'), cal = $('summaryCalendar');
+    const cal = $('summaryCalendar');
     let x0 = 0, y0 = 0, dx = 0, mode = null, busy = false, swallowClick = false;
     const setX = (px, ms) => { cal.style.setProperty('--swipe-ms', ms + 'ms'); cal.style.setProperty('--swipe-x', px + 'px'); };
-    const order = () => Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().concat('all');
-    page.addEventListener('touchstart', e => {
-      if (busy || e.touches.length !== 1 || e.target.closest('.pills')) { mode = 'off'; return; }
+    const order = () => Array.from(new Set([currentMonthStr(), ...allMonths()])).sort();
+    cal.addEventListener('touchstart', e => {
+      if (busy || e.touches.length !== 1) { mode = 'off'; return; }
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null;
     }, { passive: true });
-    page.addEventListener('touchmove', e => {
+    cal.addEventListener('touchmove', e => {
       if (mode === 'off' || e.touches.length !== 1) return;
       const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
       if (!mode) {
@@ -838,17 +834,16 @@
       dx = mx;
       if (!reduceMotion.matches) setX(dx, 0);
     }, { passive: false });
-    page.addEventListener('touchend', () => {
+    cal.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
       mode = null;
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
       // Finger moving left goes forward in time in English; in Hebrew the calendar runs right to left.
       const list = order(), i = list.indexOf(monthFilter), n = (dx < 0) !== isRtl() ? 1 : -1;
       const target = list[i + n];
-      if (Math.abs(dx) < Math.min(60, page.offsetWidth * 0.18) || i < 0 || !target) { setX(0, 200); return; }
+      if (Math.abs(dx) < Math.min(60, cal.offsetWidth * 0.18) || i < 0 || !target) { setX(0, 200); return; }
       const go = () => { pillsNeedScroll = true; selectMonth(target); pillsNeedScroll = false; };
-      // All time has no calendar, so there is nothing to slide to or from.
-      if (reduceMotion.matches || monthFilter === 'all' || target === 'all') { setX(0, 0); go(); return; }
+      if (reduceMotion.matches) { go(); return; }
       busy = true;
       const out = dx < 0 ? -cal.offsetWidth : cal.offsetWidth;
       setX(out, 160);
@@ -860,8 +855,8 @@
         setTimeout(() => { busy = false; }, 220);
       }, 160);
     });
-    page.addEventListener('touchcancel', () => { if (mode === 'swipe') setX(0, 200); mode = null; });
-    page.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') setX(0, 200); mode = null; });
+    cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   })();
   function showShiftsInList(ids) {
     switchTab('shifts');
@@ -880,75 +875,11 @@
     });
   }
 
-  // ---- swipe to delete ----
   function isRtl() { return document.documentElement.getAttribute('dir') === 'rtl'; }
-  function setRowOpen(rowEl, open) {
-    if (openSwipeRow && openSwipeRow !== rowEl) setRowOpen(openSwipeRow, false);
-    const rtl = isRtl();
-    if (open) {
-      rowEl.parentElement.classList.add('swiping');
-      rowEl.style.transform = `translateX(${rtl ? SWIPE_W : -SWIPE_W}px)`;
-      rowEl.classList.add('open');
-      openSwipeRow = rowEl;
-    } else {
-      rowEl.style.transform = 'translateX(0px)';
-      rowEl.classList.remove('open');
-      if (openSwipeRow === rowEl) openSwipeRow = null;
-      setTimeout(() => { if (!rowEl.classList.contains('open')) rowEl.parentElement.classList.remove('swiping'); }, 220);
-    }
-  }
-  document.addEventListener('pointerdown', (e) => {
-    if (openSwipeRow && !openSwipeRow.parentElement.contains(e.target)) setRowOpen(openSwipeRow, false);
-  });
-
-  function attachSwipe(wrapEl, onDelete) {
-    const rowEl = wrapEl.querySelector('.entry-row');
-    const delBtn = wrapEl.querySelector('.entry-swipe-delete');
-    let startX=0, startY=0, dragging=false, isHorizontal=null, moved=false, currentX=0;
-
-    rowEl.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      startX = e.clientX; startY = e.clientY; dragging = true; isHorizontal = null; moved = false;
-      rowEl.style.transition = 'none';
-      try { rowEl.setPointerCapture(e.pointerId); } catch(err) {}
-    });
-    rowEl.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - startX, dy = e.clientY - startY;
-      if (isHorizontal === null) {
-        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-        isHorizontal = Math.abs(dx) > Math.abs(dy);
-        if (!isHorizontal) { dragging = false; return; }
-      }
-      moved = true;
-      wrapEl.classList.add('swiping');
-      const rtl = isRtl();
-      const base = rowEl.classList.contains('open') ? (rtl ? SWIPE_W : -SWIPE_W) : 0;
-      let x = base + dx;
-      x = rtl ? Math.max(0, Math.min(SWIPE_W, x)) : Math.min(0, Math.max(-SWIPE_W, x));
-      currentX = x;
-      rowEl.style.transform = `translateX(${x}px)`;
-    });
-    function endDrag() {
-      if (!dragging) return;
-      dragging = false;
-      rowEl.style.transition = '';
-      if (!moved) return;
-      const rtl = isRtl();
-      const openNow = rtl ? currentX > SWIPE_W/2 : currentX < -SWIPE_W/2;
-      setRowOpen(rowEl, openNow);
-      rowEl.dataset.justSwiped = '1';
-    }
-    rowEl.addEventListener('pointerup', endDrag);
-    rowEl.addEventListener('pointercancel', endDrag);
-    delBtn.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
-    return rowEl;
-  }
 
   function renderShifts() {
     renderPills('shiftsMonthPills');
     const shifts = filteredShifts();
-    openSwipeRow = null;
     if (!shifts.length) {
       $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList"><div class="empty-state"><div class="big">${ICON_CLOCK}</div>${t('emptyShifts')}</div></div>`;
       return;
@@ -964,7 +895,6 @@
       if (c.custom) badges += `<span class="badge badge-custom">${t('badgeCustomPay')}</span>`;
       if (c.overtimeHours > 0) badges += `<span class="badge badge-overtime">${t('badgeOvertime')} ${hrsText(fmt(c.overtimeHours))}</span>`;
       return `<div class="entry-row-wrap">
-        <button class="entry-swipe-delete">${ICON_TRASH}</button>
         <div class="entry-row" data-id="${escapeHtml(s.id)}" data-kind="shift">
           <div class="entry-main">
             <div class="entry-date">${escapeHtml(dname)}${hd ? `<span class="heb-date" lang="he">${escapeHtml(hd.day + ' ' + hd.month)}</span>` : ''}</div>
@@ -1006,11 +936,7 @@
       const rowEl = wrap.querySelector('.entry-row');
       const id = rowEl.dataset.id;
       const kind = rowEl.dataset.kind;
-      attachSwipe(wrap, () => collapseRow(wrap, () => deleteShift(id)));
-      rowEl.addEventListener('click', () => {
-        if (rowEl.dataset.justSwiped) { delete rowEl.dataset.justSwiped; return; }
-        openShiftSheet(id);
-      });
+      rowEl.addEventListener('click', () => openShiftSheet(id));
     });
   }
 
@@ -1838,6 +1764,55 @@
     $('content').scrollTop = 0;
   }
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+  // Swiping sideways anywhere on a page (except the calendar, the month pills and text fields)
+  // moves to the next or previous tab. The page follows the finger; mirrored in Hebrew.
+  (() => {
+    const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'];
+    let x0 = 0, y0 = 0, dx = 0, mode = null, page = null, swallowClick = false;
+    const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
+    content.addEventListener('touchstart', e => {
+      mode = e.touches.length !== 1 || e.target.closest('#summaryCalendar, .pills, input, textarea, select') ? 'off' : null;
+      if (mode) return;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0;
+      page = $('tab-' + activeTab);
+    }, { passive: true });
+    content.addEventListener('touchmove', e => {
+      if (mode === 'off' || e.touches.length !== 1) return;
+      const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (!mode) {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
+        if (mode !== 'swipe') return;
+      }
+      e.preventDefault();
+      dx = mx;
+      // Past the first or last tab the page only gives a little, then springs back.
+      if (!reduceMotion.matches) { page.style.transition = 'none'; page.style.transform = `translateX(${target(dx) ? dx : dx * 0.25}px)`; }
+    }, { passive: false });
+    const settle = () => {
+      if (!page) return;
+      const p = page;
+      p.style.transition = 'transform .2s var(--ease-out)'; p.style.transform = '';
+      setTimeout(() => { p.style.transition = ''; }, 200);
+    };
+    content.addEventListener('touchend', () => {
+      if (mode !== 'swipe') { mode = null; return; }
+      mode = null;
+      swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
+      const next = target(dx);
+      if (Math.abs(dx) < Math.min(60, content.offsetWidth * 0.18) || !next) { settle(); return; }
+      page.style.transition = ''; page.style.transform = '';
+      switchTab(next);
+      if (reduceMotion.matches) return;
+      const np = $('tab-' + next);
+      np.style.setProperty('--page-from', (dx < 0 ? 40 : -40) + 'px');
+      np.classList.remove('page-slide'); void np.offsetWidth; np.classList.add('page-slide');
+      np.addEventListener('animationend', () => np.classList.remove('page-slide'), { once: true });
+    });
+    content.addEventListener('touchcancel', () => { if (mode === 'swipe') settle(); mode = null; });
+    content.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+  })();
   $('fab').addEventListener('click', () => {
     if (activeTab === 'shifts') openAddChoiceSheet();
   });

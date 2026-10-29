@@ -130,7 +130,7 @@
     position: relative; background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
   }
   .content { scrollbar-width: thin; scrollbar-color: var(--sep) transparent; }
-  .content { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
+  .content { touch-action: pan-y; overflow-x: hidden; flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
   .tab-page.hidden { display: none; }
   .large-title { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 14px; }
 
@@ -185,13 +185,6 @@
 
   .entry-row-wrap { position: relative; overflow: hidden; border-bottom: 1px solid var(--sep); }
   .entry-row-wrap:last-child { border-bottom: none; }
-  .entry-swipe-delete {
-    position: absolute; top: 0; bottom: 0; right: 0; width: 76px;
-    background: var(--red); color: #fff; border: none; display: flex; align-items: center; justify-content: center;
-  }
-  [dir="rtl"] .entry-swipe-delete { right: auto; left: 0; }
-  .entry-row-wrap:not(.swiping) .entry-swipe-delete { visibility: hidden; }
-  .entry-swipe-delete svg { width: 19px; height: 19px; }
   .entry-row {
     position: relative; z-index: 1; background: var(--card);
     padding: 12px 14px; display: flex; gap: 10px; align-items: center;
@@ -391,7 +384,7 @@
   .heb-sub.hidden, .luach.hidden, .luach-legend.hidden { display: none; }
   .luach { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 8px; padding: 4px 4px 10px; }
   .luach-dow, .luach-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
-  #tab-summary { touch-action: pan-y; }
+  .luach { touch-action: pan-y; }
   .luach-dow, .luach-grid { transform: translateX(var(--swipe-x, 0px)); transition: transform var(--swipe-ms, 0ms) cubic-bezier(.23, 1, .32, 1); }
   .luach-grid { row-gap: 2px; }
   .luach-dow span { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 7px 0 5px; }
@@ -444,6 +437,7 @@
     .sheet-overlay.closing::before { animation: fadeOut .2s ease-in forwards; }
 
     .tab-page { animation: pageIn .26s var(--ease-out); }
+    .tab-page.page-slide { animation: pageSide .26s var(--ease-out); }
     .tab-btn.active svg { animation: tabPop .34s var(--ease-out); }
     .title-add { animation: popIn .3s var(--ease-out); }
     .wheel-panel { animation: panelIn .22s var(--ease-out); }
@@ -454,6 +448,7 @@
   @keyframes sheetUp { from { transform: translateY(100%); } }
   @keyframes sheetDown { to { transform: translateY(100%); } }
   @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes pageSide { from { opacity: 0; transform: translateX(var(--page-from, 40px)); } }
   @keyframes tabPop { 0% { transform: scale(.82); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
   @keyframes popIn { from { opacity: 0; transform: scale(.5); } }
   @keyframes panelIn { from { opacity: 0; transform: translateY(-6px); } }
