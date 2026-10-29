@@ -633,14 +633,20 @@
   }
 
   function renderPills(containerId) {
-    const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
+    // A month reached by swiping the calendar gets a pill too, even with no shifts in it.
+    const months = Array.from(new Set([currentMonthStr(), ...(monthFilter === 'all' ? [] : [monthFilter]), ...allMonths()])).sort().reverse();
     const el = $(containerId);
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
     el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => {
       btn.addEventListener('click', () => selectMonth(btn.dataset.month));
     });
+    if (pillsNeedScroll) {
+      const a = el.querySelector('.pill.active');
+      if (a) el.scrollLeft += a.getBoundingClientRect().left - el.getBoundingClientRect().left - (el.clientWidth - a.offsetWidth) / 2;
+    }
   }
+  let pillsNeedScroll = false;
 
   function filteredShifts() {
     return state.shifts.filter(s => monthFilter === 'all' || monthKey(s.date) === monthFilter)
@@ -809,6 +815,52 @@
     else if (!list.length) openShiftSheet(null, cell.dataset.date);
     else showShiftsInList(list.map(x => x.id));
   });
+  // Swiping the calendar sideways moves one month back or forward (mirrored in Hebrew). The days
+  // follow the finger, then slide out and the new month slides in. Up/down scrolling is untouched.
+  (() => {
+    const cal = $('summaryCalendar');
+    let x0 = 0, y0 = 0, dx = 0, mode = null, busy = false, swallowClick = false;
+    const setX = (px, ms) => { cal.style.setProperty('--swipe-ms', ms + 'ms'); cal.style.setProperty('--swipe-x', px + 'px'); };
+    const step = (m, n) => { const [y, mo] = m.split('-').map(Number); const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+    cal.addEventListener('touchstart', e => {
+      if (busy || e.touches.length !== 1) { mode = 'off'; return; }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null;
+    }, { passive: true });
+    cal.addEventListener('touchmove', e => {
+      if (mode === 'off' || e.touches.length !== 1) return;
+      const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (!mode) {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
+        if (mode !== 'swipe') return;
+      }
+      e.preventDefault();
+      dx = mx;
+      if (!reduceMotion.matches) setX(dx, 0);
+    }, { passive: false });
+    cal.addEventListener('touchend', () => {
+      if (mode !== 'swipe') { mode = null; return; }
+      mode = null;
+      swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
+      if (Math.abs(dx) < Math.min(60, cal.offsetWidth * 0.18)) { setX(0, 200); return; }
+      // Finger moving left turns to the next month in English; in Hebrew the calendar runs right to left.
+      const n = (dx < 0) !== isRtl() ? 1 : -1;
+      const go = () => { pillsNeedScroll = true; selectMonth(step(monthFilter, n)); pillsNeedScroll = false; };
+      if (reduceMotion.matches) { go(); return; }
+      busy = true;
+      const out = dx < 0 ? -cal.offsetWidth : cal.offsetWidth;
+      setX(out, 160);
+      setTimeout(() => {
+        go();
+        setX(-out * 0.35, 0);
+        void cal.offsetWidth;
+        setX(0, 220);
+        setTimeout(() => { busy = false; }, 220);
+      }, 160);
+    });
+    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') setX(0, 200); mode = null; });
+    cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+  })();
   function showShiftsInList(ids) {
     switchTab('shifts');
     ids.forEach((id, i) => {
@@ -962,7 +1014,7 @@
 
   // ---- goals ----
   function renderGoalPills() {
-    const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
+    const months = Array.from(new Set([currentMonthStr(), goalMonth(), ...allMonths()])).sort().reverse();
     const el = $('goalMonthPills');
     const active = goalMonth();
     el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}</button>`).join('');

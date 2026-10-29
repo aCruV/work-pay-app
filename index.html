@@ -391,6 +391,8 @@
   .heb-sub.hidden, .luach.hidden, .luach-legend.hidden { display: none; }
   .luach { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 8px; padding: 4px 4px 10px; }
   .luach-dow, .luach-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .luach { touch-action: pan-y; }
+  .luach-dow, .luach-grid { transform: translateX(var(--swipe-x, 0px)); transition: transform var(--swipe-ms, 0ms) cubic-bezier(.23, 1, .32, 1); }
   .luach-grid { row-gap: 2px; }
   .luach-dow span { text-align: center; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 7px 0 5px; }
   .luach-dow span.shab { color: var(--shab-ink); }
