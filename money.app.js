@@ -768,21 +768,13 @@
   }
   const shortHours = h => String(Math.round(h * 100) / 100);
   function hrsText(v) { return getLang() === 'he' ? v + ' ' + t('hoursUnit') : v + t('hoursUnit'); }
-  let calShownFor = null, calChips = new Set(), calSwiping = false;
-  function renderCalendar() {
-    const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
-    const on = monthFilter !== 'all';
-    [cal, legend].forEach(el => el.classList.toggle('hidden', !on));
-    heb.classList.toggle('hidden', !on || !showHebrewDates());
-    if (!on) return;
-    const [y, m] = monthFilter.split('-').map(Number);
+  // One month of the Luach (weekday row + day grid). The swipe also uses it to draw the month beside the current one.
+  function monthGridHtml(month) {
+    const [y, m] = month.split('-').map(Number);
     const first = new Date(y, m - 1, 1), daysIn = new Date(y, m, 0).getDate();
     const settings = state.settings;
-    const h1 = hebrewDate(first), h2 = hebrewDate(new Date(y, m - 1, daysIn));
-    heb.textContent = !h1 ? '' : h1.year !== h2.year ? `${h1.month} ${h1.year} – ${h2.month} ${h2.year}`
-      : h1.month === h2.month ? `${h1.month} ${h1.year}` : `${h1.month} – ${h2.month} ${h1.year}`;
     const byDate = new Map();
-    state.shifts.forEach(x => { if (monthKey(x.date) === monthFilter) byDate.set(x.date, (byDate.get(x.date) || []).concat(x)); });
+    state.shifts.forEach(x => { if (monthKey(x.date) === month) byDate.set(x.date, (byDate.get(x.date) || []).concat(x)); });
     const today = todayStr();
     const fullDays = [0, 1, 2, 3, 4, 5, 6].map(d => weekendBands(d, settings).some(([a, z]) => a === 0 && z === 1440));
     let html = '<div class="luach-dow" aria-hidden="true">' + fullDays.map((full, d) => `<span${full ? ' class="shab"' : ''}>${escapeHtml(dowShort(d))}</span>`).join('') + '</div><div class="luach-grid">';
@@ -806,7 +798,22 @@
       html += `<button type="button" class="luach-day${inMonth ? '' : ' out'}${ds === today ? ' today' : ''}${list.some(x => x.isHoliday) ? ' hol' : ''}" data-date="${ds}"${inMonth ? '' : ' disabled tabindex="-1"'} aria-label="${escapeHtml(label)}">${shade}`
         + `<span class="luach-d">${d.getDate()}</span>${chip}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
     }
-    cal.innerHTML = html + '</div>';
+    return html + '</div>';
+  }
+  let calShownFor = null, calChips = new Set(), calSwiping = false;
+  function renderCalendar() {
+    const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
+    const on = monthFilter !== 'all';
+    [cal, legend].forEach(el => el.classList.toggle('hidden', !on));
+    heb.classList.toggle('hidden', !on || !showHebrewDates());
+    if (!on) return;
+    const [y, m] = monthFilter.split('-').map(Number);
+    const first = new Date(y, m - 1, 1), daysIn = new Date(y, m, 0).getDate();
+    const settings = state.settings;
+    const h1 = hebrewDate(first), h2 = hebrewDate(new Date(y, m - 1, daysIn));
+    heb.textContent = !h1 ? '' : h1.year !== h2.year ? `${h1.month} ${h1.year} – ${h2.month} ${h2.year}`
+      : h1.month === h2.month ? `${h1.month} ${h1.year}` : `${h1.month} – ${h2.month} ${h1.year}`;
+    cal.innerHTML = `<div class="luach-track"><div class="luach-pane">${monthGridHtml(monthFilter)}</div></div>`;
     const chips = new Set(Array.from(cal.querySelectorAll('.luach-hrs')).map(c => c.parentElement.dataset.date));
     if (!reduceMotion.matches) {
       if (calShownFor && calShownFor !== monthFilter && !calSwiping) {
@@ -837,16 +844,55 @@
     else if (!list.length) openShiftSheet(null, cell.dataset.date);
     else showShiftsInList(list.map(x => x.id));
   });
+  // Shared feel for both swipes: the finger is followed once per frame, a quick flick counts even
+  // when short, and the slide settles with a soft ease that is slower than a tap's response.
+  const SLIDE_MS = 380, SLIDE_BACK_MS = 320, SLIDE_EASE = 'cubic-bezier(.2, .85, .25, 1)';
+  function swipeVelocity() {
+    let pts = [];
+    return {
+      reset() { pts = []; },
+      push(x) { const t = performance.now(); pts.push([x, t]); while (pts.length > 2 && t - pts[0][1] > 100) pts.shift(); },
+      // px per ms over the last ~100ms; 0 if the finger rested before lifting
+      get() { if (pts.length < 2 || performance.now() - pts[pts.length - 1][1] > 80) return 0; const a = pts[0], z = pts[pts.length - 1]; return (z[0] - a[0]) / Math.max(1, z[1] - a[1]); }
+    };
+  }
+  // Release: commit past 30% of the width, or on a flick in the swipe's direction. Faster flicks finish sooner.
+  const swipeCommits = (dx, v, w) => Math.abs(dx) > w * 0.3 || (Math.abs(v) > 0.4 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 16);
+  const slideMs = (left, v) => Math.round(Math.max(220, Math.min(SLIDE_MS, Math.abs(v) > 0.4 ? left / Math.abs(v) * 1.5 : SLIDE_MS)));
+
   // Swiping the calendar sideways steps through the months that have shifts (plus this month);
-  // All time is picked from its pill. Mirrored in Hebrew. Elsewhere a sideways swipe changes tab.
+  // All time is picked from its pill. The next month is drawn beside the current one and both
+  // move with the finger, so the card is never empty. Mirrored in Hebrew.
   (() => {
-    const cal = $('summaryCalendar');
-    let x0 = 0, y0 = 0, dx = 0, mode = null, busy = false, swallowClick = false;
-    const setX = (px, ms) => { cal.style.setProperty('--swipe-ms', ms + 'ms'); cal.style.setProperty('--swipe-x', px + 'px'); };
+    const cal = $('summaryCalendar'), vel = swipeVelocity();
+    let x0 = 0, y0 = 0, dx = 0, mode = null, busy = false, swallowClick = false, raf = 0, track = null, side = null, sideKey = '';
     const order = () => Array.from(new Set([currentMonthStr(), ...allMonths()])).sort();
+    // Finger moving right goes forward in time in English (the next month comes in from the left).
+    const targetFor = d => { const list = order(), i = list.indexOf(monthFilter); return i < 0 ? null : list[i + ((d > 0) !== isRtl() ? 1 : -1)] || null; };
+    const place = (x, ms, h) => {
+      track.style.transition = ms ? `transform ${ms}ms ${SLIDE_EASE}, height ${ms}ms ${SLIDE_EASE}` : 'none';
+      track.style.transform = `translate3d(${x}px, 0, 0)`;
+      if (h != null) track.style.height = h + 'px';
+    };
+    const dropSide = () => { if (side) side.remove(); side = null; sideKey = ''; };
+    const pullSide = (month, d) => {
+      const key = month ? month + (d > 0 ? '<' : '>') : '';
+      if (key === sideKey) return;
+      dropSide();
+      if (!month) return;
+      side = document.createElement('div');
+      side.className = 'luach-pane side';
+      side.setAttribute('aria-hidden', 'true'); side.inert = true;
+      side.innerHTML = monthGridHtml(month);
+      side.style.transform = `translate3d(${d > 0 ? -100 : 100}%, 0, 0)`;
+      track.appendChild(side); sideKey = key;
+    };
+    const reset = () => { if (track) { track.style.transition = track.style.transform = track.style.height = track.style.willChange = ''; } dropSide(); busy = false; };
+    const frame = () => { raf = 0; const target = targetFor(dx); pullSide(target, dx); place(target ? dx : dx * 0.3, 0); };
     cal.addEventListener('touchstart', e => {
       if (busy || e.touches.length !== 1) { mode = 'off'; return; }
-      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null; vel.reset();
+      track = cal.querySelector('.luach-track');
     }, { passive: true });
     cal.addEventListener('touchmove', e => {
       if (mode === 'off' || e.touches.length !== 1) return;
@@ -855,33 +901,36 @@
         if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
         mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
+        if (!reduceMotion.matches) track.style.willChange = 'transform';
       }
       e.preventDefault();
-      dx = mx;
-      if (!reduceMotion.matches) setX(dx, 0);
+      dx = mx; vel.push(e.touches[0].clientX);
+      if (!reduceMotion.matches && !raf) raf = requestAnimationFrame(frame);
     }, { passive: false });
+    const springBack = () => {
+      busy = true;
+      place(0, SLIDE_BACK_MS);
+      setTimeout(reset, SLIDE_BACK_MS);
+    };
     cal.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
       mode = null;
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
-      // Finger moving right goes forward in time in English (the next month comes in from the left); mirrored in Hebrew.
-      const list = order(), i = list.indexOf(monthFilter), n = (dx > 0) !== isRtl() ? 1 : -1;
-      const target = list[i + n];
-      if (Math.abs(dx) < Math.min(60, cal.offsetWidth * 0.18) || i < 0 || !target) { setX(0, 200); return; }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      const target = targetFor(dx), v = vel.get(), w = track.offsetWidth;
+      if (!target || !swipeCommits(dx, v, w)) { if (reduceMotion.matches) return; springBack(); return; }
       const go = () => { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; };
       if (reduceMotion.matches) { go(); return; }
       busy = true;
-      const out = dx < 0 ? -cal.offsetWidth : cal.offsetWidth;
-      setX(out, 160);
-      setTimeout(() => {
-        go();
-        setX(-out * 0.35, 0);
-        void cal.offsetWidth;
-        setX(0, 220);
-        setTimeout(() => { busy = false; }, 220);
-      }, 160);
+      pullSide(target, dx);
+      const out = dx > 0 ? w : -w, ms = slideMs(Math.abs(out - dx), v);
+      // Months have 5 or 6 week rows: the card eases to the new month's height during the slide.
+      track.style.height = track.offsetHeight + 'px';
+      void track.offsetHeight;
+      place(out, ms, side.offsetHeight);
+      setTimeout(() => { go(); reset(); }, ms);
     });
-    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') setX(0, 200); mode = null; });
+    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(); mode = null; });
     cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   })();
   function showShiftsInList(ids) {
@@ -1796,11 +1845,11 @@
   // moves to the next or previous tab. Like iOS, the next page is pulled in beside the current one
   // and both move with the finger, so the screen is never empty. Mirrored in Hebrew.
   (() => {
-    const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'];
-    let x0 = 0, y0 = 0, dx = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false;
+    const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'], vel = swipeVelocity();
+    let x0 = 0, y0 = 0, dx = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false, raf = 0;
     const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
-    const move = (el, x, ms) => { el.style.transition = ms ? `transform ${ms}ms var(--ease-out)` : 'none'; el.style.transform = `translateX(${x}px)`; };
-    const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = ''; };
+    const move = (el, x, ms) => { el.style.transition = ms ? `transform ${ms}ms ${SLIDE_EASE}` : 'none'; el.style.transform = `translate3d(${x}px, 0, 0)`; };
+    const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = el.style.willChange = ''; };
     // The Shifts "+" button lives in its title row, so it shows while that page slides in (otherwise the title shifts when it appears).
     const dropSide = () => { if (side) { side.classList.add('hidden'); clear(side); side.classList.remove('swipe-page'); $('fab').classList.toggle('hidden', activeTab !== 'shifts'); } side = sideTab = null; };
     // Show the neighbouring page level with the top of the screen, just off the edge.
@@ -1812,14 +1861,22 @@
       const cs = getComputedStyle(content);
       side.classList.add('swipe-page');
       if (tab === 'shifts') $('fab').classList.remove('hidden');
-      Object.assign(side.style, { position: 'absolute', top: content.scrollTop + parseFloat(cs.paddingTop) + 'px', left: cs.paddingLeft, width: cur.offsetWidth + 'px' });
+      Object.assign(side.style, { position: 'absolute', top: content.scrollTop + parseFloat(cs.paddingTop) + 'px', left: cs.paddingLeft, width: cur.offsetWidth + 'px', willChange: 'transform' });
       side.classList.remove('hidden');
     };
     const W = () => content.clientWidth;
+    const frame = () => {
+      raf = 0;
+      const next = target(dx);
+      pullSide(next);
+      // Past the first or last tab the page only gives a little, then springs back.
+      move(cur, next ? dx : dx * 0.3, 0);
+      if (side) move(side, dx + (dx < 0 ? W() : -W()), 0);
+    };
     content.addEventListener('touchstart', e => {
       mode = busy || e.touches.length !== 1 || e.target.closest('#summaryCalendar, .pills, input, textarea, select') ? 'off' : null;
       if (mode) return;
-      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; vel.reset();
       cur = $('tab-' + activeTab);
     }, { passive: true });
     content.addEventListener('touchmove', e => {
@@ -1829,32 +1886,29 @@
         if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
         mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
+        if (!reduceMotion.matches) cur.style.willChange = 'transform';
       }
       e.preventDefault();
-      dx = mx;
-      if (reduceMotion.matches) return;
-      const next = target(dx);
-      pullSide(next);
-      // Past the first or last tab the page only gives a little, then springs back.
-      move(cur, next ? dx : dx * 0.25, 0);
-      if (side) move(side, dx + (dx < 0 ? W() : -W()), 0);
+      dx = mx; vel.push(e.touches[0].clientX);
+      if (!reduceMotion.matches && !raf) raf = requestAnimationFrame(frame);
     }, { passive: false });
     const springBack = () => {
       const s = side, sx = dx < 0 ? W() : -W();
-      move(cur, 0, 200);
-      if (s) move(s, sx, 200);
+      move(cur, 0, SLIDE_BACK_MS);
+      if (s) move(s, sx, SLIDE_BACK_MS);
       busy = true;
-      setTimeout(() => { clear(cur); if (side === s) dropSide(); busy = false; }, 200);
+      setTimeout(() => { clear(cur); if (side === s) dropSide(); busy = false; }, SLIDE_BACK_MS);
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
       mode = null;
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
-      const next = target(dx);
-      if (Math.abs(dx) < Math.min(60, W() * 0.18) || !next) { springBack(); return; }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      const next = target(dx), v = vel.get();
+      if (!next || !swipeCommits(dx, v, W())) { if (reduceMotion.matches) return; springBack(); return; }
       if (reduceMotion.matches) { switchTab(next); return; }
       pullSide(next);
-      const ms = 220, out = dx < 0 ? -W() : W();
+      const out = dx < 0 ? -W() : W(), ms = slideMs(Math.abs(out - dx), v);
       busy = true;
       move(cur, out, ms); move(side, 0, ms);
       setTimeout(() => {
