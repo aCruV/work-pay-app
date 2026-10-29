@@ -823,7 +823,8 @@
         cal.style.setProperty('--cal-from', (monthFilter > calShownFor) !== isRtl() ? '-28px' : '28px');
         cal.classList.remove('cal-in'); void cal.offsetWidth; cal.classList.add('cal-in');
       }
-      if (calShownFor !== monthFilter) cal.classList.add('cal-enter');
+      // The gold bar draws in when a month is picked from a pill; after a swipe it was already on screen, so it just stays.
+      if (calShownFor !== monthFilter) cal.classList.toggle('cal-enter', !calSwiping);
       else {
         cal.classList.remove('cal-enter');
         chips.forEach(d => { if (!calChips.has(d)) cal.querySelector(`.luach-day[data-date="${d}"] .luach-hrs`).classList.add('pop'); });
@@ -849,7 +850,7 @@
   });
   // Shared feel for both swipes: the finger is followed once per frame, a quick flick counts even
   // when short, and the slide settles with a soft ease that is slower than a tap's response.
-  const SLIDE_MS = 380, SLIDE_BACK_MS = 320, SLIDE_EASE = 'cubic-bezier(.2, .85, .25, 1)';
+  const SLIDE_MS = 460, SLIDE_BACK_MS = 380, SLIDE_EASE = 'cubic-bezier(.25, .8, .25, 1)';
   function swipeVelocity() {
     let pts = [];
     return {
@@ -859,9 +860,11 @@
       get() { if (pts.length < 2 || performance.now() - pts[pts.length - 1][1] > 80) return 0; const a = pts[0], z = pts[pts.length - 1]; return (z[0] - a[0]) / Math.max(1, z[1] - a[1]); }
     };
   }
-  // Release: commit past 30% of the width, or on a flick in the swipe's direction. Faster flicks finish sooner.
-  const swipeCommits = (dx, v, w) => Math.abs(dx) > w * 0.3 || (Math.abs(v) > 0.4 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 16);
-  const slideMs = (left, v) => Math.round(Math.max(220, Math.min(SLIDE_MS, Math.abs(v) > 0.4 ? left / Math.abs(v) * 1.5 : SLIDE_MS)));
+  // Release: commit past 35% of the width, or on a clear flick in the swipe's direction. Flicks finish a little sooner.
+  const swipeCommits = (dx, v, w) => Math.abs(dx) > w * 0.35 || (Math.abs(v) > 0.5 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 40);
+  const slideMs = (left, v) => Math.round(Math.max(340, Math.min(SLIDE_MS, Math.abs(v) > 0.5 ? left / Math.abs(v) * 2 : SLIDE_MS)));
+  // A drag only becomes a sideways swipe once it is clearly sideways, so scrolling never flips pages by accident.
+  const SWIPE_START = 14, SWIPE_AXIS = 1.6;
 
   // Swiping the calendar sideways steps through the months that have shifts (plus this month);
   // All time is picked from its pill. The next month is drawn beside the current one and both
@@ -901,8 +904,8 @@
       if (mode === 'off' || e.touches.length !== 1) return;
       const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
       if (!mode) {
-        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
-        mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
+        if (Math.abs(mx) < SWIPE_START && Math.abs(my) < SWIPE_START) return;
+        mode = Math.abs(mx) > Math.abs(my) * SWIPE_AXIS ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
         if (!reduceMotion.matches) track.style.willChange = 'transform';
       }
@@ -1845,7 +1848,36 @@
     $('fab').classList.toggle('hidden', tab !== 'shifts');
     $('content').scrollTop = 0;
   }
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+  // Tapping a tab plays its page's entrance every time (rows cascade, the goal ring fills), not only the first
+  // time its data changed. Swipes skip this: the page is already in view as it slides in.
+  function replayEntrance(tab) {
+    if (reduceMotion.matches) return;
+    const cascade = (els, cls, step, max) => {
+      els = Array.from(els);
+      els.forEach(el => el.classList.remove(cls));
+      void document.body.offsetWidth;
+      els.forEach((el, i) => {
+        el.style.setProperty('--row-delay', Math.min(i, max) * step + 'ms');
+        el.classList.add(cls);
+        el.addEventListener('animationend', () => { el.classList.remove(cls); el.style.removeProperty('--row-delay'); }, { once: true });
+      });
+    };
+    if (tab === 'shifts') cascade($('shiftsList').querySelectorAll('.entry-row-wrap'), 'row-in', 28, 10);
+    if (tab === 'summary') cascade($('payBreakdown').querySelectorAll('.bd-row'), 'bd-in', 30, 8);
+    if (tab === 'goals') {
+      const ring = $('goalRingProgress'), to = ring.getAttribute('stroke-dashoffset');
+      ring.style.transition = 'none';
+      ring.setAttribute('stroke-dashoffset', ring.getAttribute('stroke-dasharray'));
+      void ring.getBoundingClientRect();
+      ring.style.transition = '';
+      ring.setAttribute('stroke-dashoffset', to);
+    }
+  }
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    const same = btn.dataset.tab === activeTab;
+    switchTab(btn.dataset.tab);
+    if (!same) replayEntrance(btn.dataset.tab);
+  }));
 
   // Swiping sideways anywhere on a page (except the calendar, the month pills and text fields)
   // moves to the next or previous tab. Like iOS, the next page is pulled in beside the current one
@@ -1889,8 +1921,8 @@
       if (mode === 'off' || e.touches.length !== 1) return;
       const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
       if (!mode) {
-        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
-        mode = Math.abs(mx) > Math.abs(my) * 1.2 ? 'swipe' : 'off';
+        if (Math.abs(mx) < SWIPE_START && Math.abs(my) < SWIPE_START) return;
+        mode = Math.abs(mx) > Math.abs(my) * SWIPE_AXIS ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
         if (!reduceMotion.matches) cur.style.willChange = 'transform';
       }

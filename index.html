@@ -438,7 +438,7 @@
     .sheet-overlay.closing .sheet { animation: sheetDown .2s var(--ease-in) forwards; }
     .sheet-overlay.closing::before { animation: fadeOut .2s ease-in forwards; }
 
-    .tab-page { animation: pageIn .26s var(--ease-out); }
+    .tab-page { animation: pageIn .34s var(--ease-out); }
     .tab-btn.active svg { animation: tabPop .34s var(--ease-out); }
     .title-add { animation: popIn .3s var(--ease-out); }
     .wheel-panel { animation: panelIn .22s var(--ease-out); }
@@ -453,7 +453,7 @@
   @keyframes fadeOut { to { opacity: 0; } }
   @keyframes sheetUp { from { transform: translateY(100%); } }
   @keyframes sheetDown { to { transform: translateY(100%); } }
-  @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes pageIn { from { opacity: 0; transform: translateY(10px); } }
   @keyframes tabPop { 0% { transform: scale(.82); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
   @keyframes popIn { from { opacity: 0; transform: scale(.5); } }
   @keyframes panelIn { from { opacity: 0; transform: translateY(-6px); } }
