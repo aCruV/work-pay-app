@@ -1910,6 +1910,8 @@
       pullSide(next);
       const out = dx < 0 ? -W() : W(), ms = slideMs(Math.abs(out - dx), v);
       busy = true;
+      // The tab bar highlight moves the moment the finger lifts, together with the page, not after the slide.
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === next));
       move(cur, out, ms); move(side, 0, ms);
       setTimeout(() => {
         // The pulled-in page sits at the top of the screen; switchTab scrolls to the top, so it stays put.
