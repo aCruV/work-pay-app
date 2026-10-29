@@ -442,6 +442,11 @@
     .title-add { animation: popIn .3s var(--ease-out); }
     .wheel-panel { animation: panelIn .22s var(--ease-out); }
     .entry-row-wrap.row-in { animation: rowIn .34s var(--ease-out) both; animation-delay: var(--row-delay, 0ms); }
+    .bd-row.bd-in { animation: rowIn .34s var(--ease-out) both; animation-delay: var(--row-delay, 0ms); }
+    .luach.cal-in .luach-grid, .luach.cal-in .luach-dow { animation: calIn .26s var(--ease-out); }
+    .luach.cal-enter .luach-day.today .luach-d::after { animation: barIn .4s var(--ease-out) .12s both; }
+    .luach-hrs.pop { animation: chipPop .42s var(--ease-out); }
+    .reveal { animation: panelIn .22s var(--ease-out); }
   }
   @keyframes fadeIn { from { opacity: 0; } }
   @keyframes fadeOut { to { opacity: 0; } }
@@ -453,6 +458,9 @@
   @keyframes popIn { from { opacity: 0; transform: scale(.5); } }
   @keyframes panelIn { from { opacity: 0; transform: translateY(-6px); } }
   @keyframes rowIn { from { opacity: 0; transform: translateY(10px); } }
+  @keyframes calIn { from { opacity: 0; transform: translateX(var(--cal-from, 28px)); } }
+  @keyframes barIn { from { transform: scaleX(0); } }
+  @keyframes chipPop { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
   @media (prefers-reduced-motion: reduce) {
     .entry-row-wrap.removing, .goal-ring-progress, .toast { transition: none; }
   }

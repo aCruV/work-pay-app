@@ -639,7 +639,7 @@
     });
     if (pillsNeedScroll) {
       const a = el.querySelector('.pill.active');
-      if (a) el.scrollLeft += a.getBoundingClientRect().left - el.getBoundingClientRect().left - (el.clientWidth - a.offsetWidth) / 2;
+      if (a) el.scrollTo({ left: el.scrollLeft + a.getBoundingClientRect().left - el.getBoundingClientRect().left - (el.clientWidth - a.offsetWidth) / 2, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
     }
   }
   let pillsNeedScroll = false;
@@ -706,8 +706,18 @@
     // Days worked counts calendar days, so two shifts on one day are one day.
     const days = new Set(shifts.map(x => x.date)).size;
     html += row(t('bdTotal'), hrsText(fmt(totalHours)) + ' · ' + (days === 1 ? t('bdOneDay') : t('bdDays').replace('{n}', days)), totalMoney, ' bd-total');
-    $('payBreakdown').innerHTML = html;
+    const list = $('payBreakdown');
+    list.innerHTML = html;
+    const totalEl = list.querySelector('.bd-total .stat-val');
+    totalEl._countValue = bdShownFor === monthFilter ? bdLastTotal : undefined;
+    countTo(totalEl, totalMoney, money);
+    bdLastTotal = totalMoney;
+    if (bdShownFor !== monthFilter && !reduceMotion.matches) {
+      list.querySelectorAll('.bd-row').forEach((r, i) => { r.style.setProperty('--row-delay', Math.min(i, 8) * 30 + 'ms'); r.classList.add('bd-in'); });
+    }
+    bdShownFor = monthFilter;
   }
+  let bdShownFor = null, bdLastTotal = 0;
 
   // ---- Luach: the month on the Israeli wall calendar ----
   // Hebrew numerals for Hebrew dates: 15 → ט״ו, 22 → כ״ב, 5787 → תשפ״ז.
@@ -758,6 +768,7 @@
   }
   const shortHours = h => String(Math.round(h * 100) / 100);
   function hrsText(v) { return getLang() === 'he' ? v + ' ' + t('hoursUnit') : v + t('hoursUnit'); }
+  let calShownFor = null, calChips = new Set(), calSwiping = false;
   function renderCalendar() {
     const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
     const on = monthFilter !== 'all';
@@ -796,12 +807,27 @@
         + `<span class="luach-d">${d.getDate()}</span>${chip}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
     }
     cal.innerHTML = html + '</div>';
+    const chips = new Set(Array.from(cal.querySelectorAll('.luach-hrs')).map(c => c.parentElement.dataset.date));
+    if (!reduceMotion.matches) {
+      if (calShownFor && calShownFor !== monthFilter && !calSwiping) {
+        cal.style.setProperty('--cal-from', (monthFilter > calShownFor) !== isRtl() ? '28px' : '-28px');
+        cal.classList.remove('cal-in'); void cal.offsetWidth; cal.classList.add('cal-in');
+      }
+      if (calShownFor !== monthFilter) cal.classList.add('cal-enter');
+      else {
+        cal.classList.remove('cal-enter');
+        chips.forEach(d => { if (!calChips.has(d)) cal.querySelector(`.luach-day[data-date="${d}"] .luach-hrs`).classList.add('pop'); });
+      }
+    }
+    calShownFor = monthFilter; calChips = chips;
     cal.classList.toggle('with-heb', showHebrewDates());
     const windowText = windowDurationMinutes(settings) === 0 ? t('calNoWeekend')
       : `${t('calLegendWeekend')} · ${dowShort(settings.weekendStartDow)} ${settings.weekendStartTime} – ${dowShort(settings.weekendEndDow)} ${settings.weekendEndTime}`;
     legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span><span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`
       + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`;
   }
+  // The pill slide plays once; later re-renders of the same month must not replay it.
+  $('summaryCalendar').addEventListener('animationend', e => { if (e.animationName === 'calIn') $('summaryCalendar').classList.remove('cal-in'); });
   // Tapping a day: edit its shift, add one on that date, or show several in the Shifts list.
   $('summaryCalendar').addEventListener('click', e => {
     const cell = e.target.closest('.luach-day');
@@ -842,7 +868,7 @@
       const list = order(), i = list.indexOf(monthFilter), n = (dx < 0) !== isRtl() ? 1 : -1;
       const target = list[i + n];
       if (Math.abs(dx) < Math.min(60, cal.offsetWidth * 0.18) || i < 0 || !target) { setX(0, 200); return; }
-      const go = () => { pillsNeedScroll = true; selectMonth(target); pillsNeedScroll = false; };
+      const go = () => { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; };
       if (reduceMotion.matches) { go(); return; }
       busy = true;
       const out = dx < 0 ? -cal.offsetWidth : cal.offsetWidth;
@@ -2383,6 +2409,7 @@
     $('fCustomPayOn').addEventListener('change', () => {
       const on = $('fCustomPayOn').checked;
       $('fCustomPayRow').classList.toggle('hidden', !on);
+      $('fCustomPayRow').classList.toggle('reveal', on);
       if (on) $('fCustomPay').focus();
     });
     if (shift) $('fDelete').addEventListener('click', () => {
