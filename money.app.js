@@ -800,8 +800,11 @@
     }
     return html + '</div>';
   }
-  let calShownFor = null, calChips = new Set(), calSwiping = false;
+  // calHold: while a swipe slides the calendar, the rest of the page already shows the new month
+  // and the calendar itself is redrawn once the slide ends.
+  let calShownFor = null, calChips = new Set(), calSwiping = false, calHold = false;
   function renderCalendar() {
+    if (calHold) return;
     const cal = $('summaryCalendar'), legend = $('summaryCalendarLegend'), heb = $('summaryHebMonth');
     const on = monthFilter !== 'all';
     [cal, legend].forEach(el => el.classList.toggle('hidden', !on));
@@ -921,6 +924,7 @@
       if (!target || !swipeCommits(dx, v, w)) { if (reduceMotion.matches) return; springBack(); return; }
       const go = () => { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; };
       if (reduceMotion.matches) { go(); return; }
+      calHold = true;
       busy = true;
       pullSide(target, dx);
       const out = dx > 0 ? w : -w, ms = slideMs(Math.abs(out - dx), v);
@@ -928,7 +932,9 @@
       track.style.height = track.offsetHeight + 'px';
       void track.offsetHeight;
       place(out, ms, side.offsetHeight);
-      setTimeout(() => { go(); reset(); }, ms);
+      // Totals, pills and breakdown switch right away (next frame, once the slide is under way).
+      requestAnimationFrame(go);
+      setTimeout(() => { calHold = false; calSwiping = true; renderCalendar(); calSwiping = false; reset(); }, ms);
     });
     cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(); mode = null; });
     cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
