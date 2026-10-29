@@ -1783,7 +1783,8 @@
   // ---- tabs ----
   function switchTab(tab) {
     activeTab = tab;
-    document.querySelectorAll('.tab-page').forEach(p => p.classList.add('hidden'));
+    // 'swipe-page' (set while a swipe drags a page in) stops the page's fade-in; it is cleared once the page is hidden again.
+    document.querySelectorAll('.tab-page').forEach(p => { if (p.id !== 'tab-' + tab) { p.classList.add('hidden'); p.classList.remove('swipe-page'); } });
     $('tab-' + tab).classList.remove('hidden');
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     $('fab').classList.toggle('hidden', tab !== 'shifts');
@@ -1792,16 +1793,34 @@
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 
   // Swiping sideways anywhere on a page (except the calendar, the month pills and text fields)
-  // moves to the next or previous tab. The page follows the finger; mirrored in Hebrew.
+  // moves to the next or previous tab. Like iOS, the next page is pulled in beside the current one
+  // and both move with the finger, so the screen is never empty. Mirrored in Hebrew.
   (() => {
     const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'];
-    let x0 = 0, y0 = 0, dx = 0, mode = null, page = null, swallowClick = false;
+    let x0 = 0, y0 = 0, dx = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false;
     const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
+    const move = (el, x, ms) => { el.style.transition = ms ? `transform ${ms}ms var(--ease-out)` : 'none'; el.style.transform = `translateX(${x}px)`; };
+    const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = ''; };
+    // The Shifts "+" button lives in its title row, so it shows while that page slides in (otherwise the title shifts when it appears).
+    const dropSide = () => { if (side) { side.classList.add('hidden'); clear(side); side.classList.remove('swipe-page'); $('fab').classList.toggle('hidden', activeTab !== 'shifts'); } side = sideTab = null; };
+    // Show the neighbouring page level with the top of the screen, just off the edge.
+    const pullSide = tab => {
+      if (sideTab === tab) return;
+      dropSide();
+      if (!tab) return;
+      sideTab = tab; side = $('tab-' + tab);
+      const cs = getComputedStyle(content);
+      side.classList.add('swipe-page');
+      if (tab === 'shifts') $('fab').classList.remove('hidden');
+      Object.assign(side.style, { position: 'absolute', top: content.scrollTop + parseFloat(cs.paddingTop) + 'px', left: cs.paddingLeft, width: cur.offsetWidth + 'px' });
+      side.classList.remove('hidden');
+    };
+    const W = () => content.clientWidth;
     content.addEventListener('touchstart', e => {
-      mode = e.touches.length !== 1 || e.target.closest('#summaryCalendar, .pills, input, textarea, select') ? 'off' : null;
+      mode = busy || e.touches.length !== 1 || e.target.closest('#summaryCalendar, .pills, input, textarea, select') ? 'off' : null;
       if (mode) return;
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0;
-      page = $('tab-' + activeTab);
+      cur = $('tab-' + activeTab);
     }, { passive: true });
     content.addEventListener('touchmove', e => {
       if (mode === 'off' || e.touches.length !== 1) return;
@@ -1813,30 +1832,42 @@
       }
       e.preventDefault();
       dx = mx;
+      if (reduceMotion.matches) return;
+      const next = target(dx);
+      pullSide(next);
       // Past the first or last tab the page only gives a little, then springs back.
-      if (!reduceMotion.matches) { page.style.transition = 'none'; page.style.transform = `translateX(${target(dx) ? dx : dx * 0.25}px)`; }
+      move(cur, next ? dx : dx * 0.25, 0);
+      if (side) move(side, dx + (dx < 0 ? W() : -W()), 0);
     }, { passive: false });
-    const settle = () => {
-      if (!page) return;
-      const p = page;
-      p.style.transition = 'transform .2s var(--ease-out)'; p.style.transform = '';
-      setTimeout(() => { p.style.transition = ''; }, 200);
+    const springBack = () => {
+      const s = side, sx = dx < 0 ? W() : -W();
+      move(cur, 0, 200);
+      if (s) move(s, sx, 200);
+      busy = true;
+      setTimeout(() => { clear(cur); if (side === s) dropSide(); busy = false; }, 200);
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
       mode = null;
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
       const next = target(dx);
-      if (Math.abs(dx) < Math.min(60, content.offsetWidth * 0.18) || !next) { settle(); return; }
-      page.style.transition = ''; page.style.transform = '';
-      switchTab(next);
-      if (reduceMotion.matches) return;
-      const np = $('tab-' + next);
-      np.style.setProperty('--page-from', (dx < 0 ? 40 : -40) + 'px');
-      np.classList.remove('page-slide'); void np.offsetWidth; np.classList.add('page-slide');
-      np.addEventListener('animationend', () => np.classList.remove('page-slide'), { once: true });
+      if (Math.abs(dx) < Math.min(60, W() * 0.18) || !next) { springBack(); return; }
+      if (reduceMotion.matches) { switchTab(next); return; }
+      pullSide(next);
+      const ms = 220, out = dx < 0 ? -W() : W();
+      busy = true;
+      move(cur, out, ms); move(side, 0, ms);
+      setTimeout(() => {
+        // The pulled-in page sits at the top of the screen; switchTab scrolls to the top, so it stays put.
+        const old = cur, s = side;
+        side = sideTab = null;
+        clear(s);
+        switchTab(next);
+        clear(old);
+        busy = false;
+      }, ms);
     });
-    content.addEventListener('touchcancel', () => { if (mode === 'swipe') settle(); mode = null; });
+    content.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(); mode = null; });
     content.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   })();
   $('fab').addEventListener('click', () => {

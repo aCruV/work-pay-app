@@ -130,8 +130,9 @@
     position: relative; background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
   }
   .content { scrollbar-width: thin; scrollbar-color: var(--sep) transparent; }
-  .content { touch-action: pan-y; overflow-x: hidden; flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
+  .content { position: relative; touch-action: pan-y; overflow-x: hidden; flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(18px + env(safe-area-inset-top)) 16px calc(100px + env(safe-area-inset-bottom)); }
   .tab-page.hidden { display: none; }
+  .tab-page.swipe-page { animation: none; }
   .large-title { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 14px; }
 
   .pills { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 16px; scrollbar-width: none; }
@@ -437,7 +438,6 @@
     .sheet-overlay.closing::before { animation: fadeOut .2s ease-in forwards; }
 
     .tab-page { animation: pageIn .26s var(--ease-out); }
-    .tab-page.page-slide { animation: pageSide .26s var(--ease-out); }
     .tab-btn.active svg { animation: tabPop .34s var(--ease-out); }
     .title-add { animation: popIn .3s var(--ease-out); }
     .wheel-panel { animation: panelIn .22s var(--ease-out); }
@@ -453,7 +453,6 @@
   @keyframes sheetUp { from { transform: translateY(100%); } }
   @keyframes sheetDown { to { transform: translateY(100%); } }
   @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } }
-  @keyframes pageSide { from { opacity: 0; transform: translateX(var(--page-from, 40px)); } }
   @keyframes tabPop { 0% { transform: scale(.82); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
   @keyframes popIn { from { opacity: 0; transform: scale(.5); } }
   @keyframes panelIn { from { opacity: 0; transform: translateY(-6px); } }
