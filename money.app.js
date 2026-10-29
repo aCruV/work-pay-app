@@ -810,7 +810,7 @@
     const chips = new Set(Array.from(cal.querySelectorAll('.luach-hrs')).map(c => c.parentElement.dataset.date));
     if (!reduceMotion.matches) {
       if (calShownFor && calShownFor !== monthFilter && !calSwiping) {
-        cal.style.setProperty('--cal-from', (monthFilter > calShownFor) !== isRtl() ? '28px' : '-28px');
+        cal.style.setProperty('--cal-from', (monthFilter > calShownFor) !== isRtl() ? '-28px' : '28px');
         cal.classList.remove('cal-in'); void cal.offsetWidth; cal.classList.add('cal-in');
       }
       if (calShownFor !== monthFilter) cal.classList.add('cal-enter');
@@ -864,8 +864,8 @@
       if (mode !== 'swipe') { mode = null; return; }
       mode = null;
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
-      // Finger moving left goes forward in time in English; in Hebrew the calendar runs right to left.
-      const list = order(), i = list.indexOf(monthFilter), n = (dx < 0) !== isRtl() ? 1 : -1;
+      // Finger moving right goes forward in time in English (the next month comes in from the left); mirrored in Hebrew.
+      const list = order(), i = list.indexOf(monthFilter), n = (dx > 0) !== isRtl() ? 1 : -1;
       const target = list[i + n];
       if (Math.abs(dx) < Math.min(60, cal.offsetWidth * 0.18) || i < 0 || !target) { setX(0, 200); return; }
       const go = () => { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; };
