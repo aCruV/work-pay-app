@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="icon-180.png?v=7">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=7">
 <title>Shifts Tracker</title>
+<link rel="preload" href="fonts/rubik-latin.woff2" as="font" type="font/woff2" crossorigin>
 <script src="money.boot.js"></script>
 <style>
   /* Luach: the Israeli wall calendar. Rubik for UI and numerals, Frank Ruhl Libre for Hebrew dates (self-hosted, OFL). */
@@ -19,6 +20,8 @@
   @font-face { font-family: 'Frank Ruhl Libre'; font-style: normal; font-weight: 500 700; font-display: swap; src: url(fonts/frankruhl-hebrew.woff2) format('woff2'); unicode-range: U+0307-0308, U+0590-05FF, U+200C-2010, U+20AA, U+25CC, U+FB1D-FB4F; }
   :root {
     --bg: #f3f4f7;
+    --splash-person: #0B1D3C;
+    --splash-hands: url(#splashGoldDeep);
     --card: #ffffff;
     --card2: #f6f7f9;
     --text: #1a1b1f;
@@ -55,6 +58,8 @@
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #000000;
+      --splash-person: url(#splashGold);
+      --splash-hands: url(#splashGold);
       --card: #1c1c1e;
       --card2: #2c2c2e;
       --text: #f2f2f7;
@@ -86,6 +91,8 @@
   }
   :root[data-theme="dark"] {
     --bg: #000000;
+    --splash-person: url(#splashGold);
+    --splash-hands: url(#splashGold);
     --card: #1c1c1e;
     --card2: #2c2c2e;
     --text: #f2f2f7;
@@ -378,22 +385,36 @@
   .goal-achieved { font-size: 15px; font-weight: 700; margin-top: 10px; }
   .goal-remaining { font-size: 13px; color: var(--muted); }
 
-  /* launch screen */
-  .splash { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: flex; align-items: center; justify-content: center; transition: opacity .4s ease, visibility .4s ease; }
+  /* launch screen: the minute hand sweeps one turn and paints the person in behind it (the logo drawn live),
+     then the mark grows towards you as the app appears. If loading runs long, the hands keep turning. */
+  .splash { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: flex; align-items: center; justify-content: center; transition: opacity .36s cubic-bezier(.4,0,1,1), visibility .36s; }
   .splash.done { opacity: 0; visibility: hidden; pointer-events: none; }
-  .splash-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; animation: splashIn .7s cubic-bezier(.2,.8,.2,1) both; }
-  .splash-logo { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); animation: splashFloat 2.6s ease-in-out .7s infinite; }
-  .splash-name { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
-  .splash-dots { display: flex; gap: 7px; margin-top: 4px; }
-  .splash-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: splashDot 1.2s ease-in-out infinite; }
-  .splash-dots span:nth-child(2) { animation-delay: .15s; }
-  .splash-dots span:nth-child(3) { animation-delay: .3s; }
-  @keyframes splashIn { from { opacity: 0; transform: scale(.9) translateY(8px); } to { opacity: 1; transform: none; } }
-  @keyframes splashFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-  @keyframes splashDot { 0%, 80%, 100% { opacity: .25; transform: scale(.8); } 40% { opacity: 1; transform: scale(1); } }
+  .splash-inner { display: flex; flex-direction: column; align-items: center; transition: transform .36s cubic-bezier(.55,0,1,.45), opacity .3s ease; }
+  .splash.done .splash-inner { transform: scale(1.35); opacity: 0; }
+  .splash-mark { display: block; width: 120px; height: 158px; overflow: visible; }
+  .splash-person { fill: var(--splash-person); }
+  .splash-head { transform-box: fill-box; transform-origin: center; animation: splashHead .46s cubic-bezier(.16,1,.3,1) .5s both; }
+  .splash-hand { fill: none; stroke: var(--splash-hands); stroke-width: 42.9; stroke-linecap: round; transform-box: view-box; }
+  .splash-min { animation: splashMin .8s cubic-bezier(.22,1,.36,1) .06s both, splashSpin 2.4s linear 1.05s infinite; }
+  .splash-hour { animation: splashHour .8s cubic-bezier(.22,1,.36,1) .06s both, splashSpin 28.8s linear 1.05s infinite; }
+  .splash-pie { fill: none; stroke: #fff; stroke-width: 460; stroke-dasharray: 1445.2; stroke-dashoffset: 1445.2; animation: splashWipe .8s cubic-bezier(.22,1,.36,1) .06s forwards; }
+  .splash-pie-done { opacity: 0; animation: splashShow .01s linear .84s forwards; }
+  .splash-name { margin-top: 24px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); animation: splashName .5s cubic-bezier(.16,1,.3,1) .4s both; }
+  @keyframes splashWipe { to { stroke-dashoffset: 0; } }
+  @keyframes splashShow { to { opacity: 1; } }
+  @keyframes splashHead { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+  @keyframes splashMin { from { transform: rotate(-360deg); } to { transform: rotate(0deg); } }
+  @keyframes splashHour { from { transform: rotate(-30deg); } to { transform: rotate(0deg); } }
+  @keyframes splashSpin { to { transform: rotate(360deg); } }
+  @keyframes splashName { from { opacity: 0; transform: translateY(8px); filter: blur(4px); } to { opacity: 1; transform: none; filter: blur(0); } }
   @media (prefers-reduced-motion: reduce) {
-    .splash-inner, .splash-logo { animation: none; }
-    .splash-dots span { animation-duration: 2.4s; }
+    /* no sweep or growth: the finished mark fades in, and the screen simply fades out */
+    .splash-pie { animation: none; stroke-dashoffset: 0; }
+    .splash-pie-done { animation: none; opacity: 1; }
+    .splash-head, .splash-min, .splash-hour { animation: none; }
+    .splash-inner { animation: splashShow .3s ease both; }
+    .splash-name { animation: splashShow .3s ease .1s both; }
+    .splash.done .splash-inner { transform: none; }
   }
 
   /* auth */
@@ -505,9 +526,20 @@
 <body>
 <div class="splash" id="splash" aria-hidden="true">
   <div class="splash-inner">
-    <img class="splash-logo" src="splash-logo.png?v=7" alt="" width="96" height="96">
+    <svg class="splash-mark" viewBox="355 230 530 700">
+      <defs>
+        <linearGradient id="splashGold" x1="0" y1="250" x2="0" y2="950" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#EEC77F"/><stop offset="1" stop-color="#DDB267"/></linearGradient>
+        <linearGradient id="splashGoldDeep" x1="0" y1="600" x2="0" y2="900" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#C9963F"/><stop offset="1" stop-color="#B07E2E"/></linearGradient>
+        <mask id="splashWipe" maskUnits="userSpaceOnUse" x="0" y="0" width="1400" height="1400">
+          <g transform="translate(723.06 763.39) rotate(-90)"><circle class="splash-pie" cx="0" cy="0" r="230"/></g>
+          <rect class="splash-pie-done" x="0" y="0" width="1400" height="1400" fill="#fff"/>
+        </mask>
+      </defs>
+      <path class="splash-person" mask="url(#splashWipe)" d="M523.5 518C525.50 517.89 493.08 517.81 527 517.78C560.92 517.75 692.17 517.70 727 517.82C761.83 517.94 733.17 518.22 736 518.49C738.83 518.76 741.17 519.00 744 519.47C746.83 519.95 750.52 520.75 753 521.34C755.48 521.93 756.89 522.39 758.88 523C760.87 523.61 762.06 523.93 764.91 525C767.76 526.07 773.65 528.46 776 529.44C778.35 530.42 777.50 530.13 779 530.88C780.50 531.63 782.67 532.67 785 533.97C787.33 535.27 790.00 536.72 793 538.66C796.00 540.60 800.50 543.81 803 545.62C805.50 547.43 805.83 547.67 808 549.5C810.17 551.33 813.31 554.00 816 556.58C818.69 559.16 821.45 561.93 824.17 565C826.89 568.07 830.11 572.17 832.31 575C834.51 577.83 835.87 579.83 837.37 582C838.87 584.17 839.54 585.00 841.33 588C843.12 591.00 846.25 596.50 848.1 600C849.95 603.50 851.64 607.33 852.4 609C853.16 610.67 852.53 609.67 852.68 610C852.83 610.33 852.94 610.17 853.3 611C853.66 611.83 854.48 614.17 854.83 615C855.18 615.83 855.25 615.67 855.38 616C855.51 616.33 855.11 615.67 855.59 617C856.07 618.33 857.72 622.50 858.24 624C858.76 625.50 858.54 625.50 858.7 626C858.86 626.50 859.02 626.50 859.18 627C859.33 627.50 859.27 627.83 859.63 629C859.99 630.17 860.98 632.83 861.31 634C861.64 635.17 861.44 635.33 861.6 636C861.76 636.67 862.30 638.00 862.3 638C862.30 638.00 862.22 638.68 862 638.67C861.78 638.66 861.57 638.56 861 637.95C860.43 637.34 859.79 636.33 858.61 635C857.43 633.67 856.05 632.17 853.9 630C851.75 627.83 847.85 624.05 845.7 622C843.55 619.95 842.62 619.11 841 617.71C839.38 616.31 837.17 614.53 836 613.62C834.83 612.71 834.83 612.89 834 612.26C833.17 611.63 831.67 610.34 831 609.84C830.33 609.34 830.50 609.65 830 609.28C829.50 608.91 828.83 608.25 828 607.63C827.17 607.00 826.00 606.19 825 605.53C824.00 604.87 822.67 604.03 822 603.65C821.33 603.27 821.50 603.54 821 603.23C820.50 602.92 819.50 602.11 819 601.79C818.50 601.47 818.83 601.84 818 601.34C817.17 600.84 815.17 599.48 814 598.8C812.83 598.12 811.67 597.64 811 597.26C810.33 596.88 810.33 596.71 810 596.53C809.67 596.35 809.33 596.36 809 596.19C808.67 596.02 808.33 595.69 808 595.53C807.67 595.37 807.33 595.41 807 595.25C806.67 595.09 806.33 594.72 806 594.55C805.67 594.38 805.67 594.53 805 594.2C804.33 593.88 803.50 593.32 802 592.6C800.50 591.88 797.33 590.42 796 589.86C794.67 589.30 794.50 589.42 794 589.21C793.50 589.00 793.67 588.91 793 588.62C792.33 588.33 791.17 587.84 790 587.45C788.83 587.06 786.83 586.54 786 586.26C785.17 585.98 785.50 585.91 785 585.74C784.50 585.57 784.00 585.57 783 585.23C782.00 584.89 780.67 584.24 779 583.73C777.33 583.22 774.17 582.49 773 582.15C771.83 581.81 772.67 581.84 772 581.69C771.33 581.54 769.83 581.43 769 581.24C768.17 581.05 767.67 580.73 767 580.57C766.33 580.42 765.83 580.50 765 580.31C764.17 580.12 762.83 579.61 762 579.43C761.17 579.25 760.83 579.39 760 579.24C759.17 579.09 758.50 578.82 757 578.54C755.50 578.26 753.67 577.90 751 577.56C748.33 577.22 743.83 576.70 741 576.49C738.17 576.28 735.67 576.38 734 576.3C732.33 576.22 733.17 576.05 731 576.01C728.83 575.97 724.17 575.98 721 576.06C717.83 576.14 715.33 576.22 712 576.49C708.67 576.76 704.67 577.14 701 577.67C697.33 578.20 692.17 579.22 690 579.65C687.83 580.08 688.83 580.08 688 580.26C687.17 580.44 685.83 580.52 685 580.71C684.17 580.90 683.67 581.22 683 581.38C682.33 581.54 681.67 581.51 681 581.67C680.33 581.83 679.67 582.15 679 582.33C678.33 582.51 678.83 582.19 677 582.73C675.17 583.27 670.17 584.82 668 585.56C665.83 586.30 665.00 586.81 664 587.18C663.00 587.54 662.50 587.57 662 587.75C661.50 587.93 661.83 587.96 661 588.27C660.17 588.58 657.83 589.30 657 589.63C656.17 589.96 656.33 590.08 656 590.23C655.67 590.38 656.02 590.05 655 590.51C653.98 590.97 651.04 592.47 649.87 593C648.70 593.53 649.31 593.09 648 593.71C646.69 594.33 644.17 595.59 642 596.73C639.83 597.87 636.33 599.81 635 600.57C633.67 601.33 634.33 601.12 634 601.31C633.67 601.50 634.83 600.60 633 601.71C631.17 602.82 626.00 605.97 623 607.97C620.00 609.97 618.17 611.22 615 613.7C611.83 616.18 607.10 620.12 604 622.84C600.90 625.56 598.94 627.47 596.4 630C593.86 632.53 591.04 635.50 588.75 638C586.46 640.50 584.85 642.33 582.68 645C580.51 647.67 577.92 651.00 575.75 654C573.58 657.00 571.67 659.83 569.65 663C567.63 666.17 565.18 670.33 563.64 673C562.10 675.67 561.60 676.67 560.41 679C559.22 681.33 557.67 684.50 556.52 687C555.37 689.50 554.52 691.50 553.49 694C552.46 696.50 551.33 699.33 550.36 702C549.39 704.67 548.40 707.67 547.65 710C546.90 712.33 546.64 713.00 545.84 716C545.04 719.00 543.71 724.00 542.86 728C542.01 732.00 541.28 736.33 540.75 740C540.22 743.67 539.93 746.50 539.68 750C539.43 753.50 539.30 757.67 539.23 761C539.16 764.33 539.20 767.17 539.25 770C539.30 772.83 539.27 774.50 539.53 778C539.79 781.50 540.29 787.00 540.83 791C541.37 795.00 541.94 798.17 542.75 802C543.56 805.83 544.70 810.33 545.71 814C546.72 817.67 547.44 820.17 548.8 824C550.16 827.83 552.59 833.83 553.88 837C555.17 840.17 555.39 840.67 556.53 843C557.67 845.33 559.34 848.50 560.7 851C562.07 853.50 563.07 855.33 564.72 858C566.37 860.67 568.78 864.33 570.6 867C572.42 869.67 574.00 871.83 575.66 874C577.31 876.17 578.14 877.24 580.53 880C582.92 882.76 586.75 887.26 590 890.55C593.25 893.84 597.00 897.11 600 899.73C603.00 902.35 606.00 904.71 608 906.29C610.00 907.87 610.00 907.81 612 909.19C614.00 910.57 617.00 912.70 620 914.55C623.00 916.40 627.00 918.68 630 920.31C633.00 921.94 634.67 922.83 638 924.33C641.33 925.84 646.00 927.83 650 929.34C654.00 930.85 658.17 932.23 662 933.39C665.83 934.55 669.33 935.46 673 936.28C676.67 937.10 681.00 937.80 684 938.28C687.00 938.76 687.67 938.82 691 939.14C694.33 939.46 699.67 940.00 704 940.18C708.33 940.36 712.50 940.38 717 940.21C721.50 940.04 727.67 939.48 731 939.18C734.33 938.88 734.00 938.90 737 938.39C740.00 937.88 745.17 936.99 749 936.14C752.83 935.29 756.67 934.22 760 933.27C763.33 932.32 766.50 931.28 769 930.46C771.50 929.64 772.50 929.32 775 928.35C777.50 927.38 781.33 925.80 784 924.64C786.67 923.48 789.67 922.01 791 921.36C792.33 920.71 791.67 920.85 792 920.71C792.33 920.57 792.76 920.45 793 920.5C793.24 920.55 793.42 921.00 793.42 921C793.42 921.00 789.90 923.58 789 924.19C788.10 924.80 789.33 923.83 788 924.68C786.67 925.53 783.00 928.02 781 929.3C779.00 930.58 778.83 930.83 776 932.36C773.17 933.89 766.83 937.10 764 938.48C761.17 939.86 761.50 939.66 759 940.62C756.50 941.58 752.33 943.15 749 944.24C745.67 945.33 742.33 946.37 739 947.18C735.67 947.99 732.17 948.61 729 949.09C725.83 949.58 722.33 949.88 720 950.09C717.67 950.30 719.50 950.29 715 950.35C710.50 950.41 724.17 950.42 693 950.43C661.83 950.44 557.33 950.45 528 950.41C498.67 950.37 520.50 950.39 517 950.2C513.50 950.01 509.83 949.61 507 949.28C504.17 948.95 502.83 948.76 500 948.24C497.17 947.72 492.33 946.69 490 946.18C487.67 945.67 487.83 945.71 486 945.19C484.17 944.67 481.33 943.83 479 943.08C476.67 942.33 474.17 941.49 472 940.68C469.83 939.87 468.00 939.11 466 938.22C464.00 937.33 462.00 936.33 460 935.35C458.00 934.37 456.17 933.53 454 932.35C451.83 931.17 449.67 929.95 447 928.3C444.33 926.65 440.83 924.47 438 922.47C435.17 920.48 432.83 918.67 430 916.33C427.17 913.99 423.72 911.00 421 908.44C418.28 905.88 416.05 903.57 413.68 901C411.31 898.43 408.94 895.67 406.76 893C404.58 890.33 401.74 886.50 400.63 885C399.52 883.50 400.44 884.50 400.11 884C399.78 883.50 398.95 882.50 398.63 882C398.31 881.50 398.51 881.50 398.19 881C397.87 880.50 397.49 880.17 396.73 879C395.98 877.83 394.97 876.33 393.66 874C392.35 871.67 390.20 867.67 388.85 865C387.50 862.33 386.15 859.33 385.55 858C384.95 856.67 385.41 857.33 385.26 857C385.11 856.67 384.99 856.83 384.66 856C384.34 855.17 383.62 852.83 383.31 852C383.00 851.17 382.98 851.50 382.8 851C382.63 850.50 382.44 849.50 382.26 849C382.08 848.50 381.89 848.50 381.72 848C381.55 847.50 381.41 846.50 381.23 846C381.06 845.50 380.84 845.50 380.67 845C380.50 844.50 380.35 843.50 380.19 843C380.03 842.50 379.84 842.50 379.7 842C379.56 841.50 379.51 840.67 379.32 840C379.13 839.33 378.74 838.67 378.55 838C378.36 837.33 378.31 836.50 378.18 836C378.05 835.50 378.01 836.00 377.75 835C377.49 834.00 376.84 831.17 376.6 830C376.36 828.83 376.45 828.67 376.31 828C376.17 827.33 375.91 827.00 375.74 826C375.57 825.00 375.46 823.17 375.29 822C375.12 820.83 374.97 821.50 374.7 819C374.43 816.50 373.85 811.83 373.65 807C373.45 802.17 373.52 812.83 373.51 790C373.50 767.17 373.53 690.83 373.58 670C373.63 649.17 373.50 668.33 373.83 665C374.16 661.67 375.17 653.00 375.59 650C376.01 647.00 376.17 647.83 376.33 647C376.49 646.17 376.29 646.17 376.53 645C376.77 643.83 377.49 641.00 377.76 640C378.03 639.00 378.05 639.50 378.17 639C378.29 638.50 378.33 637.67 378.5 637C378.67 636.33 379.02 635.67 379.21 635C379.40 634.33 379.47 633.50 379.62 633C379.77 632.50 379.94 632.50 380.1 632C380.26 631.50 380.38 630.67 380.59 630C380.80 629.33 381.22 628.50 381.38 628C381.54 627.50 381.25 627.83 381.55 627C381.85 626.17 382.80 624.00 383.16 623C383.52 622.00 383.54 621.50 383.72 621C383.91 620.50 384.14 620.33 384.27 620C384.40 619.67 384.14 619.83 384.48 619C384.82 618.17 385.97 615.83 386.33 615C386.69 614.17 386.47 614.33 386.63 614C386.79 613.67 387.12 613.33 387.27 613C387.42 612.67 386.79 613.67 387.56 612C388.33 610.33 390.40 605.83 391.89 603C393.38 600.17 395.60 596.50 396.49 595C397.38 593.50 397.05 594.33 397.24 594C397.43 593.67 396.57 594.67 397.65 593C398.73 591.33 402.07 586.33 403.7 584C405.33 581.67 406.26 580.50 407.43 579C408.60 577.50 408.65 577.33 410.69 575C412.73 572.67 417.64 567.22 419.69 565C421.74 562.78 420.95 563.58 423 561.68C425.05 559.78 429.50 555.74 432 553.62C434.50 551.50 436.50 550.12 438 548.96C439.50 547.81 439.50 547.74 441 546.69C442.50 545.64 444.67 544.14 447 542.64C449.33 541.14 451.67 539.54 455 537.69C458.33 535.84 463.17 533.33 467 531.55C470.83 529.77 474.50 528.31 478 526.99C481.50 525.67 485.00 524.56 488 523.66C491.00 522.76 493.83 522.09 496 521.57C498.17 521.05 498.50 520.99 501 520.54C503.50 520.09 508.67 519.23 511 518.88C513.33 518.53 512.92 518.60 515 518.45C517.08 518.30 521.50 518.11 523.5 518Z"/>
+      <circle class="splash-person splash-head" cx="626.44" cy="368.84" r="119.45"/>
+      <g transform="translate(723.06 763.39)"><path class="splash-hand splash-min" d="M0 0V-103.94"/><path class="splash-hand splash-hour" d="M0 0L77.87 67.41"/></g>
+    </svg>
     <div class="splash-name">Shifts Tracker</div>
-    <div class="splash-dots"><span></span><span></span><span></span></div>
   </div>
 </div>
 <div class="app">

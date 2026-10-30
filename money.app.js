@@ -3747,19 +3747,23 @@
   }
 
   // The launch screen stays until there's something real to show (the app with data, or the
-  // sign-in form), and at least SPLASH_MIN_MS so it never just flickers.
+  // sign-in form), and at least SPLASH_MIN_MS so it never just flickers. It also lets the opening
+  // sweep finish (under a second) so the logo never cuts off half drawn; SPLASH_MAX_WAIT_MS caps that.
   const SPLASH_MIN_MS = 700;
+  const SPLASH_MAX_WAIT_MS = 1500;
   let splashHidden = false;
   function hideSplash() {
     if (splashHidden) return;
     splashHidden = true;
-    const wait = Math.max(0, SPLASH_MIN_MS - performance.now());
-    setTimeout(() => {
-      const el = $('splash');
-      if (!el) return;
+    const el = $('splash');
+    if (!el) return;
+    const entrance = el.getAnimations ? el.getAnimations({ subtree: true }).filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity) : [];
+    const minWait = new Promise(r => setTimeout(r, Math.max(0, SPLASH_MIN_MS - performance.now())));
+    const cap = new Promise(r => setTimeout(r, SPLASH_MAX_WAIT_MS));
+    Promise.race([Promise.all([minWait, ...entrance.map(a => a.finished.catch(() => {}))]), cap]).then(() => {
       el.classList.add('done');
       setTimeout(() => el.remove(), 450);
-    }, wait);
+    });
   }
 
   function hideAuthScreen() {
