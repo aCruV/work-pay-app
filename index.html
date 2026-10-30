@@ -401,6 +401,10 @@
   .splash-pie { fill: none; stroke: #fff; stroke-width: 460; stroke-dasharray: 1445.2; stroke-dashoffset: 1445.2; animation: splashWipe .8s cubic-bezier(.22,1,.36,1) .06s forwards; }
   .splash-pie-done { opacity: 0; animation: splashShow .01s linear .84s forwards; }
   .splash-name { margin-top: 24px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); animation: splashName .5s cubic-bezier(.16,1,.3,1) .4s both; }
+  /* after a sign-out reload: the mark is shown complete and still, continuing the screen that covered the sign-out */
+  .splash-quiet .splash-pie { animation: none; stroke-dashoffset: 0; }
+  .splash-quiet .splash-pie-done { animation: none; opacity: 1; }
+  .splash-quiet .splash-head, .splash-quiet .splash-name, .splash-quiet .splash-min, .splash-quiet .splash-hour, .splash-quiet .splash-inner { animation: none; }
   @keyframes splashWipe { to { stroke-dashoffset: 0; } }
   @keyframes splashShow { to { opacity: 1; } }
   @keyframes splashHead { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }

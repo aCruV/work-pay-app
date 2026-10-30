@@ -3624,17 +3624,29 @@
   // Sign-out sends any unsaved change first, then wipes this device's copies of the data.
   $('signOutBtn').addEventListener('click', () => {
     $('signOutBtn').disabled = true;
+    // The launch screen covers the app from the tap until the reloaded page shows the sign-in form.
+    leavingToSignIn = true;
+    showSplashAgain();
     const timeout = new Promise(resolve => setTimeout(resolve, 2500));
     Promise.race([flushRemoteWrite(), timeout]).then(() => {
       // Changes not yet in the cloud (e.g. made offline) would be lost with this device's copy.
-      if (hasLocalChanges() && !confirm(t('signOutUnsynced'))) { $('signOutBtn').disabled = false; return; }
+      if (hasLocalChanges() && !confirm(t('signOutUnsynced'))) {
+        leavingToSignIn = false;
+        hideSplash();
+        $('signOutBtn').disabled = false;
+        return;
+      }
       return auth.signOut()
         .catch(() => {})
         .then(() => {
           clearLocalCache();
           return db.terminate().then(() => db.clearPersistence()).catch(() => {});
         })
-        .then(() => location.reload());
+        .then(() => splashSettled($('splash')))
+        .then(() => {
+          try { sessionStorage.setItem(SPLASH_QUIET_KEY, '1'); } catch(e) {}
+          location.reload();
+        });
     });
   });
 
@@ -3755,18 +3767,26 @@
   const SPLASH_AGAIN_MAX_MS = 10000;
   // A copy taken before the first launch screen goes, so signing in from the form can play it again.
   const splashTemplate = $('splash') ? $('splash').cloneNode(true) : null;
+  // Set by money.boot.js after a sign-out reload: the launch screen starts already drawn (see .splash-quiet).
+  const SPLASH_QUIET_KEY = 'workTrackerSplashQuiet';
   let splashHidden = false;
+  let leavingToSignIn = false; // signing out: the launch screen stays up until the page reloads
+  // Resolves once the launch screen's opening sweep has finished (the turning hands don't count), at most SPLASH_MAX_WAIT_MS.
+  function splashSettled(el) {
+    const entrance = el && el.getAnimations ? el.getAnimations({ subtree: true }).filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity) : [];
+    const cap = new Promise(r => setTimeout(r, SPLASH_MAX_WAIT_MS));
+    return Promise.race([Promise.all(entrance.map(a => a.finished.catch(() => {}))), cap]);
+  }
   function hideSplash() {
     if (splashHidden) return;
     splashHidden = true;
     const el = $('splash');
     if (!el) return;
-    const entrance = el.getAnimations ? el.getAnimations({ subtree: true }).filter(a => a.effect && a.effect.getComputedTiming().iterations !== Infinity) : [];
-    const minWait = new Promise(r => setTimeout(r, Math.max(0, SPLASH_MIN_MS - performance.now())));
-    const cap = new Promise(r => setTimeout(r, SPLASH_MAX_WAIT_MS));
-    Promise.race([Promise.all([minWait, ...entrance.map(a => a.finished.catch(() => {}))]), cap]).then(() => {
+    const quiet = document.documentElement.classList.contains('splash-quiet');
+    const minWait = new Promise(r => setTimeout(r, quiet ? 0 : Math.max(0, SPLASH_MIN_MS - performance.now())));
+    Promise.all([minWait, splashSettled(el)]).then(() => {
       el.classList.add('done');
-      setTimeout(() => el.remove(), 450);
+      setTimeout(() => { el.remove(); document.documentElement.classList.remove('splash-quiet'); }, 450);
       if (el.classList.contains('again')) replayEntrance(activeTab);
     });
   }
@@ -3861,6 +3881,8 @@
         remoteReady = false;
         clearTimeout(writeTimer);
         writeTimer = null;
+        // Signing out: the app stays as it is under the launch screen; the reload brings up the sign-in form.
+        if (leavingToSignIn) return;
         // A cache stamped with an account that's no longer signed in (e.g. "Remember me"
         // was off) is private data, so it's removed rather than left on the device.
         if (getCacheOwner()) { clearLocalCache(); state = freshState(); refreshAll(); }
@@ -3868,7 +3890,7 @@
         authMode = 'signin';
         updateAuthUI();
         $('authScreen').classList.remove('loading', 'hidden');
-        hideSplash();
+        if (!leavingToSignIn) hideSplash();
       }
     });
   } catch (err) {

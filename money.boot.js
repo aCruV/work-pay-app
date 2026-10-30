@@ -19,6 +19,13 @@
     var theme = localStorage.getItem('workTrackerTheme');
     if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {}
+  // After signing out the page reloads behind the launch screen; it starts already drawn so the two look like one.
+  try {
+    if (sessionStorage.getItem('workTrackerSplashQuiet')) {
+      sessionStorage.removeItem('workTrackerSplashQuiet');
+      document.documentElement.classList.add('splash-quiet');
+    }
+  } catch (e) {}
   // The app always fits the screen: Safari ignores user-scalable=no for pinch, so pinch gestures are
   // cancelled here; double-tap zoom is turned off in CSS (touch-action: manipulation).
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (type) {
