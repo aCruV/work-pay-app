@@ -850,7 +850,7 @@
   });
   // Shared feel for both swipes: the finger is followed once per frame, a quick flick counts even
   // when short, and the slide settles with a soft ease that is slower than a tap's response.
-  const SLIDE_MS = 460, SLIDE_BACK_MS = 380, SLIDE_EASE = 'cubic-bezier(.25, .8, .25, 1)';
+  const SLIDE_MS = 460, SLIDE_BACK_MS = 380;
   function swipeVelocity() {
     let pts = [];
     return {
@@ -862,7 +862,27 @@
   }
   // Release: commit past 35% of the width, or on a clear flick in the swipe's direction. Flicks finish a little sooner.
   const swipeCommits = (dx, v, w) => Math.abs(dx) > w * 0.35 || (Math.abs(v) > 0.5 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 40);
-  const slideMs = (left, v) => Math.round(Math.max(340, Math.min(SLIDE_MS, Math.abs(v) > 0.5 ? left / Math.abs(v) * 2 : SLIDE_MS)));
+  // After the finger lifts, the slide is moved frame by frame here rather than by a CSS transition. On iPhone a
+  // transition's clock starts when it is set, but its first frame is drawn a few frames later, so the page
+  // jumped ahead (seen in a screen recording: two frozen frames, then a 161pt leap). Here the clock starts on
+  // the first frame actually drawn, and the curve starts at the finger's own speed and slows to a stop, so
+  // there is no kick when the finger lifts.
+  function glide(from, to, v, maxMs, apply, done) {
+    const D = to - from, dist = Math.abs(D);
+    const speed = Math.max(0, v * Math.sign(D || 1));
+    const T = Math.max(300, Math.min(maxMs, speed > 0 ? 3 * dist / speed : maxMs));
+    // cubic with start speed = finger speed and end speed 0 (a <= 3 keeps it from overshooting)
+    const a = dist ? Math.min(3, speed * T / dist) : 0;
+    const ease = u => a * u + (3 - 2 * a) * u * u + (a - 2) * u * u * u;
+    let t0 = null;
+    const step = now => {
+      if (t0 === null) t0 = now - 16.7;
+      const u = Math.min(1, (now - t0) / T), e = ease(u);
+      apply(from + D * e, e);
+      if (u < 1) requestAnimationFrame(step); else done();
+    };
+    requestAnimationFrame(step);
+  }
   // A drag only becomes a sideways swipe once it is clearly sideways, so scrolling never flips pages by accident.
   const SWIPE_START = 14, SWIPE_AXIS = 1.6;
 
@@ -871,12 +891,12 @@
   // move with the finger, so the card is never empty. Mirrored in Hebrew.
   (() => {
     const cal = $('summaryCalendar'), vel = swipeVelocity();
-    let x0 = 0, y0 = 0, dx = 0, mode = null, busy = false, swallowClick = false, raf = 0, track = null, side = null, sideKey = '';
+    let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, busy = false, swallowClick = false, raf = 0, track = null, side = null, sideKey = '';
     const order = () => Array.from(new Set([currentMonthStr(), ...allMonths()])).sort();
     // Finger moving right goes forward in time in English (the next month comes in from the left).
     const targetFor = d => { const list = order(), i = list.indexOf(monthFilter); return i < 0 ? null : list[i + ((d > 0) !== isRtl() ? 1 : -1)] || null; };
-    const place = (x, ms, h) => {
-      track.style.transition = ms ? `transform ${ms}ms ${SLIDE_EASE}, height ${ms}ms ${SLIDE_EASE}` : 'none';
+    const place = (x, h) => {
+      curX = x;
       track.style.transform = `translate3d(${x}px, 0, 0)`;
       if (h != null) track.style.height = h + 'px';
     };
@@ -893,8 +913,8 @@
       side.style.transform = `translate3d(${d > 0 ? -100 : 100}%, 0, 0)`;
       track.appendChild(side); sideKey = key;
     };
-    const reset = () => { if (track) { track.style.transition = track.style.transform = track.style.height = track.style.willChange = ''; } dropSide(); busy = false; };
-    const frame = () => { raf = 0; const target = targetFor(dx); pullSide(target, dx); place(target ? dx : dx * 0.3, 0); };
+    const reset = () => { if (track) { track.style.transform = track.style.height = track.style.willChange = ''; } dropSide(); busy = false; };
+    const frame = () => { raf = 0; const target = targetFor(dx); pullSide(target, dx); place(target ? dx : dx * 0.3); };
     cal.addEventListener('touchstart', e => {
       if (busy || e.touches.length !== 1) { mode = 'off'; return; }
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null; vel.reset();
@@ -913,10 +933,9 @@
       dx = mx; vel.push(e.touches[0].clientX);
       if (!reduceMotion.matches && !raf) raf = requestAnimationFrame(frame);
     }, { passive: false });
-    const springBack = () => {
+    const springBack = v => {
       busy = true;
-      place(0, SLIDE_BACK_MS);
-      setTimeout(reset, SLIDE_BACK_MS);
+      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => place(x), reset);
     };
     cal.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -924,22 +943,23 @@
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       const target = targetFor(dx), v = vel.get(), w = track.offsetWidth;
-      if (!target || !swipeCommits(dx, v, w)) { if (reduceMotion.matches) return; springBack(); return; }
-      const go = () => { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; };
-      if (reduceMotion.matches) { go(); return; }
+      if (!target || !swipeCommits(dx, v, w)) { if (reduceMotion.matches) return; springBack(v); return; }
+      if (reduceMotion.matches) { pillsNeedScroll = calSwiping = true; selectMonth(target); pillsNeedScroll = calSwiping = false; return; }
       calHold = true;
       busy = true;
       pullSide(target, dx);
-      const out = dx > 0 ? w : -w, ms = slideMs(Math.abs(out - dx), v);
+      const out = dx > 0 ? w : -w;
       // Months have 5 or 6 week rows: the card eases to the new month's height during the slide.
-      track.style.height = track.offsetHeight + 'px';
-      void track.offsetHeight;
-      place(out, ms, side.offsetHeight);
-      // Totals, pills and breakdown switch right away (next frame, once the slide is under way).
-      requestAnimationFrame(go);
-      setTimeout(() => { calHold = false; calSwiping = true; renderCalendar(); calSwiping = false; reset(); }, ms);
+      const h0 = track.offsetHeight, h1 = side.offsetHeight;
+      // Pills, totals and breakdown switch right away (just after the slide's first frame is on screen); only the
+      // Summary is redrawn then, to keep the slide smooth. The rest (Shifts list, Goals) follows when it ends.
+      let early = false;
+      const switchSummary = () => { pillsNeedScroll = true; monthFilter = lastSpecificMonth = target; renderSummary(); pillsNeedScroll = false; };
+      glide(curX, out, v, SLIDE_MS, (x, e) => { place(x, h0 + (h1 - h0) * e); if (!early) { early = true; setTimeout(switchSummary, 0); } }, () => {
+        calHold = false; calSwiping = true; renderDataViews(); calSwiping = false; reset();
+      });
     });
-    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(); mode = null; });
+    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(0); mode = null; });
     cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   })();
   function showShiftsInList(ids) {
@@ -1884,9 +1904,9 @@
   // and both move with the finger, so the screen is never empty. Mirrored in Hebrew.
   (() => {
     const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'], vel = swipeVelocity();
-    let x0 = 0, y0 = 0, dx = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false, raf = 0;
+    let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false, raf = 0;
     const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
-    const move = (el, x, ms) => { el.style.transition = ms ? `transform ${ms}ms ${SLIDE_EASE}` : 'none'; el.style.transform = `translate3d(${x}px, 0, 0)`; };
+    const move = (el, x) => { el.style.transform = `translate3d(${x}px, 0, 0)`; };
     const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = el.style.willChange = ''; };
     // The Shifts "+" button lives in its title row, so it shows while that page slides in (otherwise the title shifts when it appears).
     const dropSide = () => { if (side) { side.classList.add('hidden'); clear(side); side.classList.remove('swipe-page'); $('fab').classList.toggle('hidden', activeTab !== 'shifts'); } side = sideTab = null; };
@@ -1913,9 +1933,10 @@
       const next = target(dx);
       pullSide(next);
       // Past the first or last tab the page only gives a little, then springs back.
-      move(cur, next ? dx : dx * 0.3, 0);
+      curX = next ? dx : dx * 0.3;
+      move(cur, curX);
       pinSide();
-      if (side) move(side, dx + (dx < 0 ? W() : -W()), 0);
+      if (side) move(side, dx + (dx < 0 ? W() : -W()));
     };
     content.addEventListener('touchstart', e => {
       mode = busy || e.touches.length !== 1 || e.target.closest('#summaryCalendar, .pills, input, textarea, select') ? 'off' : null;
@@ -1936,12 +1957,10 @@
       dx = mx; vel.push(e.touches[0].clientX);
       if (!reduceMotion.matches && !raf) raf = requestAnimationFrame(frame);
     }, { passive: false });
-    const springBack = () => {
-      const s = side, sx = dx < 0 ? W() : -W();
-      move(cur, 0, SLIDE_BACK_MS);
-      if (s) move(s, sx, SLIDE_BACK_MS);
+    const springBack = v => {
+      const s = side, off = dx < 0 ? W() : -W();
       busy = true;
-      setTimeout(() => { clear(cur); if (side === s) dropSide(); unlock(); busy = false; }, SLIDE_BACK_MS);
+      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => { move(cur, x); if (s) move(s, x + off); }, () => { clear(cur); if (side === s) dropSide(); unlock(); busy = false; });
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -1949,16 +1968,15 @@
       swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       const next = target(dx), v = vel.get();
-      if (!next || !swipeCommits(dx, v, W())) { if (reduceMotion.matches) return; springBack(); return; }
+      if (!next || !swipeCommits(dx, v, W())) { if (reduceMotion.matches) return; springBack(v); return; }
       if (reduceMotion.matches) { switchTab(next); return; }
       pullSide(next);
       pinSide();
-      const out = dx < 0 ? -W() : W(), ms = slideMs(Math.abs(out - dx), v);
+      const w = W(), out = dx < 0 ? -w : w, off = dx < 0 ? w : -w;
       busy = true;
       // The tab bar highlight moves the moment the finger lifts, together with the page, not after the slide.
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === next));
-      move(cur, out, ms); move(side, 0, ms);
-      setTimeout(() => {
+      glide(curX, out, v, SLIDE_MS, x => { move(cur, x); move(side, x + off); }, () => {
         // The pulled-in page sits at the top of the screen; switchTab scrolls to the top, so it stays put.
         const old = cur, s = side;
         side = sideTab = null;
@@ -1967,9 +1985,9 @@
         clear(old);
         unlock();
         busy = false;
-      }, ms);
+      });
     });
-    content.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(); mode = null; });
+    content.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(0); mode = null; });
     content.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   })();
   $('fab').addEventListener('click', () => {
