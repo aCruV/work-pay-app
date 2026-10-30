@@ -257,6 +257,24 @@
   let state = load();
   let currentUser = null;
   let firestoreUnsub = null;
+  // paychecks (see "paychecks" below); declared here because the Summary can be drawn before that code runs
+  const PC_MAX_FILES = 3, PC_MAX_BYTES = 5 * 1024 * 1024, PC_CHUNK = 900000, PC_MAX_CHUNKS = 6;
+  const PC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
+  // Photos bigger than this, or wider/taller than PC_IMG_MAX px, are scaled down (still easy to read).
+  const PC_SHRINK_OVER = 1.5 * 1024 * 1024, PC_IMG_MAX = 2200;
+  const PC_REMIND_DAY = 10; // salaries are due by the 9th, so the slip should be in by the 10th
+  const ICON_CLIP = '<svg class="pill-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>';
+  const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>';
+  const ICON_IMAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg>';
+  const ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+
+  let paychecks = [];          // details of the signed-in user's files, newest data from the cloud
+  let paychecksLoaded = false; // the first list has arrived (the reminder waits for it)
+  let paycheckUnsub = null;
+  let pcUploading = null;      // month currently uploading, shown as a row
+  const pcBlobCache = new Map();
+  let pcViewUrl = null;
+
   let remoteReady = false;
 
   // The data as the cloud last confirmed it. Comparing it with `state` shows which changes were
@@ -633,7 +651,8 @@
     const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
     const el = $(containerId);
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
-    el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}</button>`).join('');
+    const withPay = new Set(paychecks.map(p => p.month));
+    el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}${withPay.has(o.v) ? ICON_CLIP : ''}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => {
       btn.addEventListener('click', () => selectMonth(btn.dataset.month));
     });
@@ -665,6 +684,7 @@
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
     renderCalendar();
     renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
+    renderPaychecks();
   }
 
   // "How your pay adds up": one line per kind of pay that actually happened in the period
@@ -1387,6 +1407,301 @@
   }
   $('restoreBtn').addEventListener('click', openRestoreSheet);
 
+  // ---- paychecks: up to 3 files (PDF, JPEG, PNG) per month, saved on the account ----
+  // Stored in Firestore (no Cloud Storage on the free plan): each file is split into pieces of at most
+  // PC_CHUNK bytes under users/{uid}/paychecks/{month}-{slot}/chunks/{n}, and its details doc is written
+  // in the same batch, so a file is either saved whole or not at all. Limits must match firestore.rules.
+  function paychecksRef(uid) { return db.collection('users').doc(uid).collection('paychecks'); }
+  function paychecksFor(month) { return paychecks.filter(p => p.month === month).sort((a, b) => a.slot - b.slot); }
+  function paycheckMonths() { return Array.from(new Set(paychecks.map(p => p.month))).sort(); }
+  function formatBytes(n) { return n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+  function pcDismissKey() { return 'workTrackerPaycheckDismissed_' + (currentUser ? currentUser.uid : ''); }
+
+  function startPaycheckSync(user) {
+    stopPaycheckSync();
+    paycheckUnsub = paychecksRef(user.uid).onSnapshot(snap => {
+      paychecks = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => /^\d{4}-\d{2}$/.test(p.month) && PC_TYPES[p.type] && p.chunks >= 1);
+      paychecksLoaded = true;
+      renderDataViews();
+    }, err => console.error('Paychecks sync error:', err));
+  }
+  function stopPaycheckSync() {
+    if (paycheckUnsub) { paycheckUnsub(); paycheckUnsub = null; }
+    paychecks = []; paychecksLoaded = false; pcUploading = null;
+    pcBlobCache.clear();
+  }
+
+  // Checks the file's first bytes, not just its name, so a renamed file can't slip through.
+  function sniffType(bytes) {
+    if (bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'application/pdf';
+    if (bytes.length > 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+    if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png';
+    return null;
+  }
+
+  // Large photos are redrawn smaller as JPEG (white behind transparent PNG areas). Returns null if it can't help.
+  function shrinkImage(blob) {
+    return new Promise(resolve => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, PC_IMG_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+        const w = Math.max(1, Math.round(img.naturalWidth * scale)), h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        c.toBlob(out => resolve(out && out.size < blob.size ? out : null), 'image/jpeg', 0.85);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+
+  // Reads, checks and (for big photos) shrinks a picked file. Resolves { bytes, type, name } or rejects with a message key.
+  async function preparePaycheckFile(file) {
+    let bytes = new Uint8Array(await file.arrayBuffer());
+    let type = sniffType(bytes);
+    if (!type) throw new Error('pcBadType');
+    let name = String(file.name || 'paycheck').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || 'paycheck';
+    if (type !== 'application/pdf' && (bytes.length > PC_SHRINK_OVER || await imageTooLarge(file))) {
+      const small = await shrinkImage(new Blob([bytes], { type }));
+      if (small) {
+        bytes = new Uint8Array(await small.arrayBuffer());
+        type = 'image/jpeg';
+        name = name.replace(/\.(png|jpe?g)$/i, '') + '.jpg';
+      }
+    }
+    if (bytes.length > PC_MAX_BYTES) throw new Error('pcTooBig');
+    if (!bytes.length) throw new Error('pcBadType');
+    return { bytes, type, name };
+  }
+  function imageTooLarge(blob) {
+    return new Promise(resolve => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(Math.max(img.naturalWidth, img.naturalHeight) > PC_IMG_MAX); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+      img.src = url;
+    });
+  }
+
+  async function uploadPaycheck(month, file) {
+    if (!currentUser) return;
+    const taken = paychecksFor(month).map(p => p.slot);
+    const slot = [1, 2, 3].find(s => !taken.includes(s));
+    if (!slot) { showToast(t('pcFull')); return; }
+    if (navigator.onLine === false) { showToast(t('pcOffline')); return; }
+    let prepared;
+    try { prepared = await preparePaycheckFile(file); }
+    catch (err) { showToast(t(err && /^pc/.test(err.message) ? err.message : 'pcBadType')); return; }
+    const { bytes, type, name } = prepared;
+    const chunks = Math.ceil(bytes.length / PC_CHUNK);
+    if (chunks > PC_MAX_CHUNKS) { showToast(t('pcTooBig')); return; }
+    const uid = currentUser.uid;
+    const ref = paychecksRef(uid).doc(`${month}-${slot}`);
+    const batch = db.batch();
+    for (let i = 0; i < chunks; i++) {
+      batch.set(ref.collection('chunks').doc(String(i)), { d: firebase.firestore.Blob.fromUint8Array(bytes.subarray(i * PC_CHUNK, (i + 1) * PC_CHUNK)) });
+    }
+    // the details doc is part of the same batch, so it only exists once every piece is saved
+    batch.set(ref, { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    pcUploading = month;
+    renderPaychecks();
+    try {
+      await batch.commit();
+      pcBlobCache.set(ref.id, new Blob([bytes], { type }));
+      showToast(t('pcSaved'));
+    } catch (err) {
+      console.error('Paycheck upload failed:', err);
+      showToast(t('pcUploadFailed'));
+    } finally {
+      pcUploading = null;
+      renderPaychecks();
+    }
+  }
+
+  async function loadPaycheckBlob(p) {
+    if (pcBlobCache.has(p.id)) return pcBlobCache.get(p.id);
+    const ref = paychecksRef(currentUser.uid).doc(p.id).collection('chunks');
+    const parts = await Promise.all(Array.from({ length: p.chunks }, (_, i) => ref.doc(String(i)).get()));
+    const pieces = parts.map(s => { const d = s.exists && s.data().d; if (!d) throw new Error('missing piece'); return d.toUint8Array(); });
+    const blob = new Blob(pieces, { type: p.type });
+    if (blob.size !== p.fileSize) throw new Error('size mismatch');
+    pcBlobCache.set(p.id, blob);
+    return blob;
+  }
+
+  function deletePaycheckDocs(uid, p) {
+    const ref = paychecksRef(uid).doc(p.id);
+    const batch = db.batch();
+    // every possible piece is removed, so nothing is left behind even if the count was off
+    for (let i = 0; i < PC_MAX_CHUNKS; i++) batch.delete(ref.collection('chunks').doc(String(i)));
+    batch.delete(ref);
+    return batch.commit();
+  }
+  function deleteAllPaychecks(uid) {
+    return paychecksRef(uid).get().then(snap => Promise.all(snap.docs.map(d => deletePaycheckDocs(uid, { id: d.id }))));
+  }
+
+  // File name used when saving: "Paycheck 2026-10.pdf", a second one that month "Paycheck 2026-10 (2).jpg".
+  function paycheckFileName(p) {
+    const n = paychecksFor(p.month).findIndex(x => x.id === p.id) + 1;
+    return `Paycheck ${p.month}${n > 1 ? ` (${n})` : ''}.${PC_TYPES[p.type]}`;
+  }
+
+  // ---- Summary: the selected month's paycheck files, and the reminder ----
+  function renderPaychecks() {
+    const wrap = $('paycheckWrap'), reminder = $('paycheckReminder');
+    const on = !!currentUser && monthFilter !== 'all';
+    wrap.classList.toggle('hidden', !on);
+    renderPaycheckReminder(reminder);
+    if (!on) return;
+    const files = paychecksFor(monthFilter);
+    let html = files.map(p => `<button type="button" class="list-row pc-row" data-pc="${escapeHtml(p.id)}">
+        <span class="pc-ico">${p.type === 'application/pdf' ? ICON_FILE : ICON_IMAGE}</span>
+        <span class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></span>
+        <span class="entry-chevron">${ICON_CHEV_R}</span>
+      </button>`).join('');
+    if (pcUploading === monthFilter) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
+    else if (files.length < PC_MAX_FILES) html += `<button type="button" class="list-row pc-row pc-add" id="paycheckAddBtn"><span class="pc-ico">${ICON_PLUS}</span><span class="rlabel">${escapeHtml(t(files.length ? 'pcAttachMore' : 'pcAttach'))}</span></button>`;
+    $('paycheckList').innerHTML = html;
+    $('paycheckList').querySelectorAll('[data-pc]').forEach(row => row.addEventListener('click', () => {
+      const p = paychecks.find(x => x.id === row.dataset.pc);
+      if (p) openPaycheckViewer(p);
+    }));
+    const add = $('paycheckAddBtn');
+    if (add) add.addEventListener('click', () => pickPaycheck(monthFilter));
+  }
+  function pickPaycheck(month) {
+    const input = $('paycheckInput');
+    input.dataset.month = month;
+    input.value = '';
+    input.click();
+  }
+  $('paycheckInput').addEventListener('change', () => {
+    const input = $('paycheckInput'), file = input.files && input.files[0], month = input.dataset.month;
+    input.value = '';
+    if (file && /^\d{4}-\d{2}$/.test(month || '')) uploadPaycheck(month, file);
+  });
+
+  // From the 10th, if last month has shifts but no paycheck, Summary asks for it (until added or dismissed).
+  function renderPaycheckReminder(el) {
+    const d = new Date();
+    const prev = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    const month = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+    let dismissed = '';
+    try { dismissed = localStorage.getItem(pcDismissKey()) || ''; } catch (e) {}
+    const show = !!currentUser && paychecksLoaded && d.getDate() >= PC_REMIND_DAY && dismissed !== month
+      && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && pcUploading !== month;
+    el.classList.toggle('hidden', !show);
+    if (!show) { el.innerHTML = ''; return; }
+    el.innerHTML = `<span class="pc-ico">${ICON_CLIP}</span>
+      <span class="pc-rem-text">${escapeHtml(t('pcReminder').replace('{m}', monthLongLabel(month)))}</span>
+      <button type="button" class="pc-rem-btn" id="pcRemAdd">${escapeHtml(t('pcReminderAdd'))}</button>
+      <button type="button" class="pc-rem-btn pc-rem-dismiss" id="pcRemDismiss">${escapeHtml(t('pcReminderDismiss'))}</button>`;
+    $('pcRemAdd').addEventListener('click', () => { selectMonth(month); pickPaycheck(month); });
+    $('pcRemDismiss').addEventListener('click', () => {
+      try { localStorage.setItem(pcDismissKey(), month); } catch (e) {}
+      renderPaycheckReminder(el);
+    });
+  }
+
+  // ---- viewing one file: preview, save, delete ----
+  function revokePaycheckView() { if (pcViewUrl) { URL.revokeObjectURL(pcViewUrl); pcViewUrl = null; } }
+  function openPaycheckViewer(p) {
+    sheetMode = 'paycheck'; editingId = null;
+    revokePaycheckView();
+    $('sheetTitle').textContent = monthLongLabel(p.month);
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('pcLoading'))}</div>`;
+    openSheetOverlay();
+    loadPaycheckBlob(p).then(blob => {
+      if (sheetMode !== 'paycheck') return;
+      pcViewUrl = URL.createObjectURL(blob);
+      const preview = p.type === 'application/pdf'
+        ? `<iframe class="pc-preview pc-pdf" src="${pcViewUrl}" title="${escapeHtml(p.name)}"></iframe>`
+        : `<img class="pc-preview" src="${pcViewUrl}" alt="${escapeHtml(p.name)}">`;
+      $('sheetBody').innerHTML = `${preview}
+        <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></div></div></div>
+        <div class="btn-stack" style="margin-top:12px;">
+          <button type="button" class="btn-plain btn-block" id="pcSaveBtn">${escapeHtml(t('pcDownload'))}</button>
+          <button type="button" class="btn-danger btn-block" id="pcDeleteBtn">${escapeHtml(t('pcDelete'))}</button>
+        </div>`;
+      $('pcSaveBtn').addEventListener('click', () => deliverFile(blob, paycheckFileName(p)));
+      $('pcDeleteBtn').addEventListener('click', () => {
+        if (!confirm(t('pcConfirmDelete').replace('{name}', p.name))) return;
+        $('pcDeleteBtn').disabled = true;
+        deletePaycheckDocs(currentUser.uid, p)
+          .then(() => { pcBlobCache.delete(p.id); closeSheetOverlay(); showToast(t('pcDeleted')); })
+          .catch(err => { console.error('Paycheck delete failed:', err); $('pcDeleteBtn').disabled = false; showToast(t('pcDeleteFailed')); });
+      });
+    }).catch(err => {
+      console.error('Opening paycheck failed:', err);
+      if (sheetMode === 'paycheck') $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('pcOpenFailed'))}</div>`;
+    });
+  }
+
+  // ---- Settings: download the paychecks of a range of months (one file, or one .zip) ----
+  function openPaycheckDownloadSheet() {
+    if (!currentUser) return;
+    sheetMode = 'paycheckDownload'; editingId = null;
+    $('sheetTitle').textContent = t('pcDlTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    const months = paycheckMonths();
+    if (!months.length) {
+      $('sheetBody').innerHTML = `<div class="empty-state"><div class="big">${ICON_FILE}</div>${escapeHtml(paychecksLoaded ? t('pcDlNone') : t('pcLoading'))}</div>`;
+      openSheetOverlay();
+      return;
+    }
+    const opts = sel => months.map(m => `<option value="${m}"${m === sel ? ' selected' : ''}>${escapeHtml(monthLongLabel(m))}</option>`).join('');
+    $('sheetBody').innerHTML = `
+      <div class="list-group">
+        <label class="list-row"><span class="rlabel">${escapeHtml(t('pcDlFrom'))}</span><select class="pc-select" id="pcDlFrom">${opts(months[0])}</select></label>
+        <label class="list-row"><span class="rlabel">${escapeHtml(t('pcDlTo'))}</span><select class="pc-select" id="pcDlTo">${opts(months[months.length - 1])}</select></label>
+      </div>
+      <div class="section-footer" id="pcDlCount" style="margin:8px 6px 16px;"></div>
+      <button type="button" class="btn-accent btn-block" id="pcDlBtn">${escapeHtml(t('pcDlBtn'))}</button>`;
+    const range = () => {
+      let a = $('pcDlFrom').value, b = $('pcDlTo').value;
+      if (a > b) [a, b] = [b, a];
+      return paychecks.filter(p => p.month >= a && p.month <= b).sort((x, y) => x.month.localeCompare(y.month) || x.slot - y.slot);
+    };
+    const update = () => { const n = range().length; $('pcDlCount').textContent = n === 1 ? t('pcDlOne') : t('pcDlCount').replace('{n}', n); };
+    $('pcDlFrom').addEventListener('change', update);
+    $('pcDlTo').addEventListener('change', update);
+    update();
+    $('pcDlBtn').addEventListener('click', async () => {
+      const files = range();
+      if (!files.length) return;
+      const btn = $('pcDlBtn');
+      btn.disabled = true;
+      try {
+        const blobs = [];
+        for (let i = 0; i < files.length; i++) {
+          btn.textContent = t('pcDlPreparing').replace('{i}', i + 1).replace('{n}', files.length);
+          blobs.push(await loadPaycheckBlob(files[i]));
+        }
+        let a = $('pcDlFrom').value, b = $('pcDlTo').value;
+        if (a > b) [a, b] = [b, a];
+        if (files.length === 1) { closeSheetOverlay(); deliverFile(blobs[0], paycheckFileName(files[0])); return; }
+        const entries = await Promise.all(files.map(async (p, i) => ({ name: paycheckFileName(p), content: new Uint8Array(await blobs[i].arrayBuffer()) })));
+        closeSheetOverlay();
+        deliverFile(buildZip(entries, 'application/zip'), a === b ? `Paychecks ${a}.zip` : `Paychecks ${a} to ${b}.zip`);
+      } catch (err) {
+        console.error('Paycheck download failed:', err);
+        showToast(t('pcDlFailed'));
+        if (sheetMode === 'paycheckDownload') { btn.disabled = false; btn.textContent = t('pcDlBtn'); }
+      }
+    });
+    openSheetOverlay();
+  }
+  $('downloadPaychecksBtn').addEventListener('click', openPaycheckDownloadSheet);
+
   // ---- new month while the app was open or suspended ----
   let lastSeenMonth = currentMonthStr();
   let lastSeenDay = todayStr();
@@ -1426,6 +1741,7 @@
   }
 
   // A .docx is a ZIP of XML files; an uncompressed ("stored") ZIP is valid and keeps this small.
+  // Also zips downloaded paychecks (content given as bytes; PDFs and photos are already compressed).
   function buildZip(files, mime) {
     const enc = new TextEncoder();
     const now = new Date();
@@ -1435,7 +1751,7 @@
     let offset = 0;
     files.forEach(f => {
       const name = enc.encode(f.name);
-      const data = enc.encode(f.content);
+      const data = typeof f.content === 'string' ? enc.encode(f.content) : f.content;
       const crc = crc32(data);
       const local = new DataView(new ArrayBuffer(30));
       local.setUint32(0, 0x04034b50, true);
@@ -2039,6 +2355,7 @@
   function closeSheetOverlay() {
     const overlay = $('sheetOverlay');
     $('sheetSave').style.visibility = '';
+    if (sheetMode === 'paycheck') revokePaycheckView();
     sheetMode = null;
     editingId = null;
     if (overlay.classList.contains('hidden') || overlay.classList.contains('closing')) return;
@@ -3131,6 +3448,7 @@
           remoteReady = false;
           return backupsRef(uid).get().then(snap => Promise.all(snap.docs.map(d => d.ref.delete())));
         })
+        .then(() => { stopPaycheckSync(); return deleteAllPaychecks(uid); })
         .then(() => db.collection('users').doc(uid).delete())
         .then(() => user.delete())
         .then(() => {
@@ -3244,8 +3562,10 @@
         remoteReady = false;
         $('accountEmail').textContent = user.email || '';
         startSync(user);
+        startPaycheckSync(user);
       } else {
         currentUser = null;
+        stopPaycheckSync();
         remoteReady = false;
         clearTimeout(writeTimer);
         writeTimer = null;

@@ -2,7 +2,7 @@
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; frame-src https://shifts-app-7602e.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; frame-src https://shifts-app-7602e.firebaseapp.com blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -139,6 +139,7 @@
   .pills::-webkit-scrollbar { display: none; }
   .pill { flex: none; padding: 7px 14px; border-radius: 999px; background: var(--card); color: var(--text); font-size: 13px; font-weight: 600; border: none; white-space: nowrap; }
   .pill.active { background: var(--accent); color: var(--on-accent); }
+  .pill-clip { width: 11px; height: 11px; margin-inline-start: 4px; vertical-align: -1px; opacity: .85; }
 
   .privacy-btn { position: absolute; top: 14px; inset-inline-end: 14px; width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--track-off); color: var(--text); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
   .privacy-btn svg { width: 19px; height: 19px; }
@@ -178,6 +179,25 @@
   .list-row select { -webkit-appearance: none; appearance: none; }
   .list-row input:focus, .list-row select:focus { outline: none; }
   .list-row.picker-row { cursor: pointer; }
+  /* paychecks */
+  .pc-row { width: 100%; justify-content: flex-start; gap: 12px; background: none; border-left: none; border-right: none; border-top: none; font: inherit; color: inherit; text-align: start; cursor: pointer; }
+  .pc-row .rlabel { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .pc-row:active { background-color: var(--press); }
+  .pc-ico { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--cap); color: var(--accent); display: grid; place-items: center; }
+  .pc-ico svg { width: 18px; height: 18px; }
+  .pc-add .rlabel { color: var(--accent); font-weight: 600; }
+  .pc-busy { cursor: default; }
+  .pc-spin::after { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 2.4px solid var(--accent); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
+  @keyframes pcSpin { to { transform: rotate(360deg); } }
+  .pc-reminder { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; box-shadow: var(--shadow); font-size: 14px; }
+  .pc-reminder.hidden { display: none; }
+  .pc-reminder .pc-ico svg { width: 17px; height: 17px; }
+  .pc-rem-text { flex: 1; min-width: 0; font-weight: 600; }
+  .pc-rem-btn { flex: none; border: none; background: none; font: inherit; font-weight: 700; color: var(--accent); padding: 6px 4px; cursor: pointer; }
+  .pc-rem-dismiss { color: var(--muted); font-weight: 600; }
+  .pc-preview { display: block; width: 100%; max-height: 58vh; object-fit: contain; border-radius: 12px; background: var(--card); margin-bottom: 12px; }
+  .pc-pdf { height: 58vh; border: none; }
+  .list-row .pc-select { max-width: 62%; cursor: pointer; }
   .picker-value { color: var(--accent); font-weight: 600; font-size: 15px; }
   .chev { color: var(--muted); margin-inline-start: 4px; }
   .ico-chev { width: 13px; height: 13px; vertical-align: -1px; }
@@ -511,12 +531,19 @@
         <div class="balance-value money-private" id="sumTotal">0</div>
         <div class="balance-sub money-private" id="sumSub"></div>
       </div>
+      <div class="pc-reminder hidden" id="paycheckReminder" role="status"></div>
       <div class="luach" id="summaryCalendar"></div>
       <div class="luach-legend" id="summaryCalendarLegend"></div>
       <div id="payBreakdownWrap" class="hidden">
         <div class="section-header" data-i18n="bdTitle">How your pay adds up</div>
         <div class="list-group bd-list" id="payBreakdown"></div>
       </div>
+      <div id="paycheckWrap" class="hidden">
+        <div class="section-header" data-i18n="pcTitle">Paycheck</div>
+        <div class="list-group" id="paycheckList"></div>
+        <div class="section-footer" data-i18n="pcHint">Up to 3 files a month · PDF, JPEG or PNG · up to 5 MB</div>
+      </div>
+      <input type="file" id="paycheckInput" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" hidden>
     </section>
 
     <section class="tab-page hidden" id="tab-shifts">
@@ -697,6 +724,7 @@
       <div class="section-header" data-i18n="sectionData">Data</div>
       <div class="btn-stack">
         <button type="button" class="btn-plain btn-block" id="reportBtn" data-i18n="btnExportReport">Export Data (Table)</button>
+        <button type="button" class="btn-plain btn-block" id="downloadPaychecksBtn" data-i18n="btnDownloadPaychecks">Download paychecks</button>
         <button type="button" class="btn-plain btn-block" id="exportBtn" data-i18n="btnExport">Export backup (JSON)</button>
         <label class="btn-plain btn-block">
           <span data-i18n="btnImport">Import backup</span>
