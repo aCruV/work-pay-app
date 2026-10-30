@@ -435,6 +435,8 @@
   #authSubmitBtn:disabled { opacity: 0.5; cursor: default; }
   /* while the details are checked: a spinner in place of the label, at full colour */
   #authSubmitBtn.busy { position: relative; color: transparent; opacity: 1; }
+  #delBtn.busy { position: relative; color: transparent; opacity: 1; }
+  #delBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--red); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
   #authSubmitBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--on-accent); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
   .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }

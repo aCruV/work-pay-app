@@ -3719,6 +3719,7 @@
       e.preventDefault();
       if (!ready()) return;
       $('delBtn').disabled = true;
+      $('delBtn').classList.add('busy');
       $('delMsg').textContent = '';
       const user = auth.currentUser;
       const uid = user.uid;
@@ -3734,15 +3735,26 @@
         })
         .then(() => { stopPaycheckSync(); return deleteAllPaychecks(uid); })
         .then(() => db.collection('users').doc(uid).delete())
-        .then(() => user.delete())
+        .then(() => {
+          // The launch screen covers the app from here until the reloaded page shows the sign-in form (as on sign-out).
+          leavingToSignIn = true;
+          showSplashAgain();
+          return user.delete();
+        })
         .then(() => {
           clearLocalCache();
           try { localStorage.removeItem(REMEMBER_KEY); localStorage.removeItem('workTrackerBackup_' + uid); } catch(e) {}
           return db.terminate().then(() => db.clearPersistence()).catch(() => {});
         })
-        .then(() => location.reload())
+        .then(() => splashSettled($('splash')))
+        .then(() => {
+          try { sessionStorage.setItem(SPLASH_QUIET_KEY, '1'); } catch(e) {}
+          location.reload();
+        })
         .catch(err => {
           console.error('Account deletion failed:', err);
+          if (leavingToSignIn) { leavingToSignIn = false; hideSplash(); }
+          $('delBtn').classList.remove('busy');
           $('delMsg').textContent = authErrorMessage(err);
           $('delBtn').disabled = !ready();
         });
