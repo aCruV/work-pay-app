@@ -890,9 +890,12 @@
     // a <= 3 keeps it from overshooting
     const a = dist ? Math.max(aMin, Math.min(3, speed * T / dist)) : 0;
     const ease = u => a * u + (3 - 2 * a) * u * u + (a - 2) * u * u * u;
+    // The first frame advances by the real time since the finger lifted (right at 60Hz or 120Hz), but by no
+    // more than one 60Hz frame, so a late first frame can never turn into a jump.
+    const lifted = performance.now();
     let t0 = null;
     const step = now => {
-      if (t0 === null) t0 = now - 16.7;
+      if (t0 === null) t0 = Math.max(Math.min(lifted, now), now - 16.7);
       const u = Math.min(1, (now - t0) / T), e = ease(u);
       apply(from + D * e, e);
       if (u < 1) requestAnimationFrame(step); else done();
