@@ -1890,6 +1890,11 @@
     const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = el.style.willChange = ''; };
     // The Shifts "+" button lives in its title row, so it shows while that page slides in (otherwise the title shifts when it appears).
     const dropSide = () => { if (side) { side.classList.add('hidden'); clear(side); side.classList.remove('swipe-page'); $('fab').classList.toggle('hidden', activeTab !== 'shifts'); } side = sideTab = null; };
+    // A finger that drifts up/down before the swipe is recognised can leave the page scrolling; the pulled-in
+    // page follows the scroll so it always sits at the top of the screen, and the scroll is stopped once the
+    // swipe is recognised. Without this the new page arrives too high and snaps down at the end.
+    const pinSide = () => { if (side) side.style.top = content.scrollTop + parseFloat(getComputedStyle(content).paddingTop) + 'px'; };
+    const unlock = () => { content.style.overflowY = ''; };
     // Show the neighbouring page level with the top of the screen, just off the edge.
     const pullSide = tab => {
       if (sideTab === tab) return;
@@ -1909,6 +1914,7 @@
       pullSide(next);
       // Past the first or last tab the page only gives a little, then springs back.
       move(cur, next ? dx : dx * 0.3, 0);
+      pinSide();
       if (side) move(side, dx + (dx < 0 ? W() : -W()), 0);
     };
     content.addEventListener('touchstart', e => {
@@ -1924,7 +1930,7 @@
         if (Math.abs(mx) < SWIPE_START && Math.abs(my) < SWIPE_START) return;
         mode = Math.abs(mx) > Math.abs(my) * SWIPE_AXIS ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
-        if (!reduceMotion.matches) cur.style.willChange = 'transform';
+        if (!reduceMotion.matches) { cur.style.willChange = 'transform'; content.style.overflowY = 'hidden'; }
       }
       e.preventDefault();
       dx = mx; vel.push(e.touches[0].clientX);
@@ -1935,7 +1941,7 @@
       move(cur, 0, SLIDE_BACK_MS);
       if (s) move(s, sx, SLIDE_BACK_MS);
       busy = true;
-      setTimeout(() => { clear(cur); if (side === s) dropSide(); busy = false; }, SLIDE_BACK_MS);
+      setTimeout(() => { clear(cur); if (side === s) dropSide(); unlock(); busy = false; }, SLIDE_BACK_MS);
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -1946,6 +1952,7 @@
       if (!next || !swipeCommits(dx, v, W())) { if (reduceMotion.matches) return; springBack(); return; }
       if (reduceMotion.matches) { switchTab(next); return; }
       pullSide(next);
+      pinSide();
       const out = dx < 0 ? -W() : W(), ms = slideMs(Math.abs(out - dx), v);
       busy = true;
       // The tab bar highlight moves the moment the finger lifts, together with the page, not after the slide.
@@ -1958,6 +1965,7 @@
         clear(s);
         switchTab(next);
         clear(old);
+        unlock();
         busy = false;
       }, ms);
     });
