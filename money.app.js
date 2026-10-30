@@ -262,7 +262,8 @@
   const PC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
   // Photos bigger than this, or wider/taller than PC_IMG_MAX px, are scaled down (still easy to read).
   const PC_SHRINK_OVER = 1.5 * 1024 * 1024, PC_IMG_MAX = 2200;
-  const PC_REMIND_DAY = 10; // salaries are due by the 9th, so the slip should be in by the 10th
+  const PC_REMIND_DAY = 10;
+  const PC_SAVE_WAIT_MS = 30000; // after this, "Saving…" gives way to a "taking longer than usual" message // salaries are due by the 9th, so the slip should be in by the 10th
   const ICON_CLIP = '<svg class="pill-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>';
   const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>';
   const ICON_IMAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg>';
@@ -273,7 +274,8 @@
   let paychecks = [];          // details of the signed-in user's files, newest data from the cloud
   let paychecksLoaded = false; // the first list has arrived (the reminder waits for it)
   let paycheckUnsub = null;
-  let pcUploading = null;      // month currently uploading, shown as a row
+  const pcSaving = new Set();  // months with a file being saved, each shown with a "Saving…" row
+  let pcZoomHistory = false;   // the full-screen picture added a Back-button step
   const pcBlobCache = new Map();
   let pcViewUrl = null;
   let pcZoomEl = null;         // the full-screen picture layer, while open
@@ -304,15 +306,27 @@
     base = base || { settings: {}, rateSets: [], shifts: [], additions: [], templates: [] };
     const settings = Object.assign({}, remote.settings);
     Object.keys(local.settings).forEach(k => { if (local.settings[k] !== base.settings[k]) settings[k] = local.settings[k]; });
+    // Both sides changed the same item (e.g. a note here while offline, custom pay on another device):
+    // start from theirs and apply each field this device changed, so neither change is lost.
+    // Only if both changed the same field does this device's value win.
+    const mergeFields = (base, mine, theirs) => {
+      const out = Object.assign({}, theirs);
+      new Set([...Object.keys(base), ...Object.keys(mine)]).forEach(k => {
+        if (JSON.stringify(mine[k]) === JSON.stringify(base[k])) return;
+        if (k in mine) out[k] = mine[k]; else delete out[k];
+      });
+      return out;
+    };
     const mergeList = (b, l, r) => {
       const was = new Map(b.map(x => [x.id, JSON.stringify(x)]));
+      const baseItem = new Map(b.map(x => [x.id, x]));
       const mine = new Map(l.map(x => [x.id, x]));
       const out = [];
       const inRemote = new Set();
       r.forEach(x => {
         inRemote.add(x.id);
         const m = mine.get(x.id);
-        if (m && JSON.stringify(m) !== was.get(x.id)) out.push(m);
+        if (m && JSON.stringify(m) !== was.get(x.id)) out.push(was.has(x.id) && JSON.stringify(x) !== was.get(x.id) ? mergeFields(baseItem.get(x.id), m, x) : m);
         else if (m || !was.has(x.id) || JSON.stringify(x) !== was.get(x.id)) out.push(x);
       });
       l.forEach(x => { if (!inRemote.has(x.id) && (!was.has(x.id) || JSON.stringify(x) !== was.get(x.id))) out.push(x); });
@@ -540,13 +554,45 @@
     return overlapMs / 3600000;
   }
 
+  // Overtime follows the Israeli rest rule: shifts with less than 8 hours' rest between them are one work
+  // period, and every hour beyond the threshold within that period is overtime (in whichever shift it falls).
+  // 06:00-14:00 then 22:00 starts fresh; 06:00-14:00 then 20:00 makes the 20:00 shift overtime.
+  // carry = hours already worked in the period before a shift starts.
+  const REST_GAP_MS = 8 * 3600000;
+  const shiftKey = s => s.date + ' ' + s.startTime + ' ' + s.endTime;
+  let carryCache = { list: null, len: -1, map: null };
+  function periodCarries(list) {
+    const items = list.map(s => { const r = shiftRange(s); return { s, start: +r.start, end: +r.end }; })
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+    const map = new Map();
+    let periodEnd = -Infinity, worked = 0;
+    items.forEach(it => {
+      if (it.start - periodEnd >= REST_GAP_MS) worked = 0;
+      map.set(it.s.id, { key: shiftKey(it.s), carry: worked });
+      worked += (it.end - it.start) / 3600000;
+      periodEnd = Math.max(periodEnd, it.end);
+    });
+    return map;
+  }
+  function carryFor(shift) {
+    const list = state.shifts;
+    // saving always makes a new list, so the periods are worked out once per change
+    if (carryCache.list !== list || carryCache.len !== list.length) carryCache = { list, len: list.length, map: periodCarries(list) };
+    const hit = shift.id != null && carryCache.map.get(shift.id);
+    if (hit && hit.key === shiftKey(shift)) return hit.carry;
+    // a shift being edited (or not saved yet) is worked out in place of its saved version
+    const draft = Object.assign({}, shift, { id: '__draft' });
+    return periodCarries(list.filter(x => x.id !== shift.id).concat(draft)).get('__draft').carry;
+  }
+
   function calcShift(shift) {
     const settings = ratesFor(shift);
     const { start, end } = shiftRange(shift);
     const totalHours = (end - start) / 3600000;
     const threshold = settings.overtimeThreshold || 0;
     const otPercent = settings.overtimePercent || 100;
-    const overtimeHours = threshold > 0 ? Math.max(0, totalHours - threshold) : 0;
+    const carry = threshold > 0 ? carryFor(shift) : 0;
+    const overtimeHours = threshold > 0 ? Math.min(totalHours, Math.max(0, totalHours - Math.max(0, threshold - carry))) : 0;
     const otBoundary = new Date(end.getTime() - overtimeHours*3600000);
 
     const baseWindowHours = Math.max(0, Math.min(totalHours - overtimeHours, weekendOverlapHours(start, otBoundary, settings)));
@@ -567,10 +613,10 @@
       + otWindowHours*settings.rate*pctOtWindow/100;
     const basePay = totalHours*settings.rate;
     const windowHours = baseWindowHours + otWindowHours;
-    // Rounded once here, the way the rows show them, so every total (summary, goals, reports) adds up to the rows.
+    // Rounded here the way the rows show them; totals add exactHours and round once (see the return below).
     const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
     if (isValidCustomPay(shift.customPay)) {
-      return { totalHours: r2(totalHours), windowHours: 0, overtimeHours: 0, pay: r2(shift.customPay), bonusPay: 0, custom: true,
+      return { totalHours: r2(totalHours), exactHours: totalHours, windowHours: 0, overtimeHours: 0, pay: r2(shift.customPay), bonusPay: 0, custom: true,
         parts: [{ key: 'custom', hours: r2(totalHours), amount: r2(shift.customPay), pct: null }] };
     }
     // The pay split by kind of hour, for the "how your pay adds up" breakdown. Each part is rounded and
@@ -590,7 +636,8 @@
       biggest.amount = r2(biggest.amount + r2(pay) - parts.reduce((t, x) => t + x.amount, 0));
       biggest.hours = r2(biggest.hours + r2(totalHours) - parts.reduce((t, x) => t + x.hours, 0));
     }
-    return { totalHours: r2(totalHours), windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)), parts };
+    // exactHours: unrounded, for totals (adding rounded hours drifted, e.g. 179.92h for exactly 180h)
+    return { totalHours: r2(totalHours), exactHours: totalHours, windowHours: r2(windowHours), overtimeHours: r2(overtimeHours), pay: r2(pay), bonusPay: r2(r2(pay) - r2(basePay)), parts };
   }
 
   function rateSummary(r) {
@@ -650,8 +697,13 @@
     return Array.from(set).sort().reverse();
   }
 
+  // Months offered as pills (and stepped through by the calendar swipe): this month, months with shifts,
+  // and months with paychecks, so a paycheck stays reachable even if its month's shifts are all deleted.
+  function pillMonths() {
+    return Array.from(new Set([currentMonthStr(), ...allMonths(), ...paychecks.map(p => p.month)])).sort().reverse();
+  }
   function renderPills(containerId) {
-    const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
+    const months = pillMonths();
     const el = $(containerId);
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
     const withPay = new Set(paychecks.map(p => p.month));
@@ -677,7 +729,7 @@
     let totalHours=0, workPay=0;
     shifts.forEach(s => {
       const c = calcShift(s);
-      totalHours += c.totalHours;
+      totalHours += c.exactHours;
       workPay += c.pay;
     });
     const months = monthFilter === 'all' ? allMonths() : [monthFilter];
@@ -813,7 +865,7 @@
       let chip = '', label = formatDateDisplay(ds);
       if (list.length) {
         const calcs = list.map(calcShift);
-        const hours = calcs.reduce((sum, c) => sum + c.totalHours, 0);
+        const hours = calcs.reduce((sum, c) => sum + c.exactHours, 0);
         const kind = list.some((x, i) => x.isHoliday && !calcs[i].custom) ? ' holiday' : calcs.some(c => c.windowHours > 0) ? ' weekend' : '';
         chip = `<span class="luach-hrs${kind}">${shortHours(hours)}</span>`;
         label += ` · ${hrsText(fmt(hours))}`;
@@ -934,7 +986,7 @@
   (() => {
     const cal = $('summaryCalendar'), vel = swipeVelocity();
     let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, busy = false, swallowClick = false, raf = 0, track = null, side = null, sideKey = '';
-    const order = () => Array.from(new Set([currentMonthStr(), ...allMonths()])).sort();
+    const order = () => pillMonths().reverse();
     // Finger moving right goes forward in time in English (the next month comes in from the left).
     const targetFor = d => { const list = order(), i = list.indexOf(monthFilter); return i < 0 ? null : list[i + ((d > 0) !== isRtl() ? 1 : -1)] || null; };
     const place = (x, h) => {
@@ -1088,10 +1140,11 @@
 
   // ---- goals ----
   function renderGoalPills() {
-    const months = Array.from(new Set([currentMonthStr(), ...allMonths()])).sort().reverse();
+    const months = pillMonths();
     const el = $('goalMonthPills');
     const active = goalMonth();
-    el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}</button>`).join('');
+    const withPay = new Set(paychecks.map(p => p.month));
+    el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}${withPay.has(m) ? ICON_CLIP : ''}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => btn.addEventListener('click', () => selectMonth(btn.dataset.month)));
   }
   const goalKey = () => state.settings.goalType === 'income' ? 'goalIncome' : 'goalHours';
@@ -1120,7 +1173,7 @@
     const month = goalMonth();
     const shifts = state.shifts.filter(s => monthKey(s.date) === month);
     let totalHours = 0, workPay = 0;
-    shifts.forEach(s => { const c = calcShift(s); totalHours += c.totalHours; workPay += c.pay; });
+    shifts.forEach(s => { const c = calcShift(s); totalHours += c.exactHours; workPay += c.pay; });
     const otherIncome = additionsTotal(month);
     const totalEarn = workPay + otherIncome;
 
@@ -1431,7 +1484,7 @@
   }
   function stopPaycheckSync() {
     if (paycheckUnsub) { paycheckUnsub(); paycheckUnsub = null; }
-    paychecks = []; paychecksLoaded = false; pcUploading = null;
+    paychecks = []; paychecksLoaded = false; pcSaving.clear();
     pcBlobCache.clear();
   }
 
@@ -1513,19 +1566,25 @@
     }
     // the details doc is part of the same batch, so it only exists once every piece is saved
     batch.set(ref, { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-    pcUploading = month;
+    pcSaving.add(month);
     renderPaychecks();
-    try {
-      await batch.commit();
+    // A connection that looks online but can't reach the server would keep "Saving…" spinning forever, so the
+    // wait is capped. The save itself can't be cancelled; it keeps going and finishes when the connection does.
+    let gaveUp = false;
+    const commit = batch.commit().then(() => {
       pcBlobCache.set(ref.id, new Blob([bytes], { type }));
-      showToast(t('pcSaved'));
-    } catch (err) {
+      if (gaveUp) showToast(t('pcSaved'));
+      return 'ok';
+    }, err => {
       console.error('Paycheck upload failed:', err);
-      showToast(t('pcUploadFailed'));
-    } finally {
-      pcUploading = null;
-      renderPaychecks();
-    }
+      if (gaveUp) showToast(t('pcUploadFailed'));
+      return 'fail';
+    });
+    const result = await Promise.race([commit, new Promise(res => setTimeout(() => res('slow'), PC_SAVE_WAIT_MS))]);
+    if (result === 'slow') gaveUp = true;
+    showToast(t(result === 'ok' ? 'pcSaved' : result === 'fail' ? 'pcUploadFailed' : 'pcSlow'));
+    pcSaving.delete(month);
+    renderPaychecks();
   }
 
   async function loadPaycheckBlob(p) {
@@ -1570,7 +1629,7 @@
         <span class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></span>
         <span class="entry-chevron">${ICON_CHEV_R}</span>
       </button>`).join('');
-    if (pcUploading === monthFilter) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
+    if (pcSaving.has(monthFilter)) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
     else if (files.length < PC_MAX_FILES) html += `<button type="button" class="list-row pc-row pc-add" id="paycheckAddBtn"><span class="pc-ico">${ICON_PLUS}</span><span class="rlabel">${escapeHtml(t(files.length ? 'pcAttachMore' : 'pcAttach'))}</span></button>`;
     $('paycheckList').innerHTML = html;
     $('paycheckList').querySelectorAll('[data-pc]').forEach(row => row.addEventListener('click', () => {
@@ -1600,7 +1659,7 @@
     let dismissed = '';
     try { dismissed = localStorage.getItem(pcDismissKey()) || ''; } catch (e) {}
     const show = !!currentUser && paychecksLoaded && d.getDate() >= PC_REMIND_DAY && dismissed !== month
-      && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && pcUploading !== month;
+      && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && !pcSaving.has(month);
     el.classList.toggle('hidden', !show);
     if (!show) { el.innerHTML = ''; return; }
     el.innerHTML = `<span class="pc-ico">${ICON_CLIP}</span>
@@ -1634,21 +1693,24 @@
       + `<button type="button" class="pc-zoom-close" aria-label="${escapeHtml(t('pcClose'))}">${ICON_X}</button>`;
     document.body.appendChild(el);
     pcZoomEl = el;
+    // its own Back-button step, so Back closes just the picture and leaves the paycheck viewer open
+    try { history.pushState({ zoom: true }, ''); pcZoomHistory = true; } catch (e) {}
     el.querySelector('.pc-zoom-close').addEventListener('click', () => closePaycheckZoom());
     if (!isPdf) attachZoomGestures(el, el.querySelector('.pc-zoom-img'));
     requestAnimationFrame(() => el.classList.add('open'));
   }
-  function closePaycheckZoom(now) {
+  function closePaycheckZoom(now, fromBack) {
     const el = pcZoomEl;
     if (!el) return;
     pcZoomEl = null;
+    // closed by ✕, swipe or Escape: remove the Back-button step it added
+    if (pcZoomHistory && !fromBack) { pcZoomHistory = false; ignoreNextPop = true; history.back(); }
     if (now || reduceMotion.matches) { el.remove(); return; }
     el.classList.remove('open');
     el.classList.add('closing');
     setTimeout(() => el.remove(), 220);
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && pcZoomEl) { e.stopPropagation(); closePaycheckZoom(); } }, true);
-  window.addEventListener('popstate', () => closePaycheckZoom(true));
 
   function attachZoomGestures(el, img) {
     const MAX = 5, DOUBLE = 2.5;
@@ -1988,7 +2050,7 @@
     let sumHours = 0, sumWeekend = 0, sumOvertime = 0, sumPay = 0;
     const shiftRows = shifts.map(x => {
       const c = calcShift(x);
-      sumHours += c.totalHours; sumWeekend += c.windowHours; sumOvertime += c.overtimeHours; sumPay += c.pay;
+      sumHours += c.exactHours; sumWeekend += c.windowHours; sumOvertime += c.overtimeHours; sumPay += c.pay;
       return [
         dateFmt(x.date), dayFmt(x.date), x.startTime, x.endTime, fmt(c.totalHours), money(ratesFor(x).rate),
         c.windowHours > 0 ? fmt(c.windowHours) : dash, c.overtimeHours > 0 ? fmt(c.overtimeHours) : dash,
@@ -2467,6 +2529,7 @@
   }
   window.addEventListener('popstate', () => {
     if (ignoreNextPop) { ignoreNextPop = false; return; }
+    if (pcZoomHistory) { pcZoomHistory = false; closePaycheckZoom(false, true); return; }
     if (!sheetHistory) return;
     sheetHistory = false;
     if (sheetIsOpen()) closeSheetOverlay();
