@@ -1907,29 +1907,33 @@
   (() => {
     const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'], vel = swipeVelocity();
     let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false, raf = 0;
+    // measured once when the finger lands, so moving frames never ask the page for sizes
+    let w = 0, padTop = 0, padLeft = '', viewH = 0, sideTop = -1;
     const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
     const move = (el, x) => { el.style.transform = `translate3d(${x}px, 0, 0)`; };
-    const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = el.style.willChange = ''; };
+    const clear = el => { el.style.transition = el.style.transform = el.style.position = el.style.top = el.style.left = el.style.width = el.style.height = el.style.overflow = el.style.willChange = ''; };
     // The Shifts "+" button lives in its title row, so it shows while that page slides in (otherwise the title shifts when it appears).
     const dropSide = () => { if (side) { side.classList.add('hidden'); clear(side); side.classList.remove('swipe-page'); $('fab').classList.toggle('hidden', activeTab !== 'shifts'); } side = sideTab = null; };
     // A finger that drifts up/down before the swipe is recognised can leave the page scrolling; the pulled-in
-    // page follows the scroll so it always sits at the top of the screen, and the scroll is stopped once the
-    // swipe is recognised. Without this the new page arrives too high and snaps down at the end.
-    const pinSide = () => { if (side) side.style.top = content.scrollTop + parseFloat(getComputedStyle(content).paddingTop) + 'px'; };
-    const unlock = () => { content.style.overflowY = ''; };
+    // page follows the scroll so it always sits at the top of the screen. Without this the new page arrives
+    // too high and snaps down at the end. (Scrolling is stopped by re-setting the position, not by turning
+    // overflow off: on iPhone that rebuilds the whole scrolling layer and costs frames.)
+    const pinSide = () => { if (side && content.scrollTop !== sideTop) { sideTop = content.scrollTop; side.style.top = sideTop + padTop + 'px'; } };
     // Show the neighbouring page level with the top of the screen, just off the edge.
     const pullSide = tab => {
       if (sideTab === tab) return;
       dropSide();
       if (!tab) return;
       sideTab = tab; side = $('tab-' + tab);
-      const cs = getComputedStyle(content);
       side.classList.add('swipe-page');
       if (tab === 'shifts') $('fab').classList.remove('hidden');
-      Object.assign(side.style, { position: 'absolute', top: content.scrollTop + parseFloat(cs.paddingTop) + 'px', left: cs.paddingLeft, width: cur.offsetWidth + 'px', willChange: 'transform' });
+      // Only one screen of the incoming page is ever visible while it slides, so it is cut to that height:
+      // the phone then draws a screenful instead of a whole long list before it can start moving.
+      sideTop = content.scrollTop;
+      Object.assign(side.style, { position: 'absolute', top: sideTop + padTop + 'px', left: padLeft, width: cur.offsetWidth + 'px', height: viewH + 'px', overflow: 'hidden', willChange: 'transform' });
       side.classList.remove('hidden');
     };
-    const W = () => content.clientWidth;
+    const W = () => w;
     const frame = () => {
       raf = 0;
       const next = target(dx);
@@ -1945,6 +1949,8 @@
       if (mode) return;
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; vel.reset();
       cur = $('tab-' + activeTab);
+      const cs = getComputedStyle(content);
+      w = content.clientWidth; padTop = parseFloat(cs.paddingTop); padLeft = cs.paddingLeft; viewH = content.clientHeight - padTop;
     }, { passive: true });
     content.addEventListener('touchmove', e => {
       if (mode === 'off' || e.touches.length !== 1) return;
@@ -1953,7 +1959,7 @@
         if (Math.abs(mx) < SWIPE_START && Math.abs(my) < SWIPE_START) return;
         mode = Math.abs(mx) > Math.abs(my) * SWIPE_AXIS ? 'swipe' : 'off';
         if (mode !== 'swipe') return;
-        if (!reduceMotion.matches) { cur.style.willChange = 'transform'; content.style.overflowY = 'hidden'; }
+        if (!reduceMotion.matches) { cur.style.willChange = 'transform'; content.scrollTop = content.scrollTop; }
       }
       e.preventDefault();
       dx = mx; vel.push(e.touches[0].clientX);
@@ -1962,7 +1968,7 @@
     const springBack = v => {
       const s = side, off = dx < 0 ? W() : -W();
       busy = true;
-      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => { move(cur, x); if (s) move(s, x + off); }, () => { clear(cur); if (side === s) dropSide(); unlock(); busy = false; });
+      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => { move(cur, x); if (s) move(s, x + off); }, () => { clear(cur); if (side === s) dropSide(); busy = false; });
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -1974,7 +1980,7 @@
       if (reduceMotion.matches) { switchTab(next); return; }
       pullSide(next);
       pinSide();
-      const w = W(), out = dx < 0 ? -w : w, off = dx < 0 ? w : -w;
+      const out = dx < 0 ? -w : w, off = dx < 0 ? w : -w;
       busy = true;
       // The tab bar highlight moves the moment the finger lifts, together with the page, not after the slide.
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === next));
@@ -1985,7 +1991,6 @@
         clear(s);
         switchTab(next);
         clear(old);
-        unlock();
         busy = false;
       });
     });
