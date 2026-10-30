@@ -850,14 +850,28 @@
   });
   // Shared feel for both swipes: the finger is followed once per frame, a quick flick counts even
   // when short, and the slide settles with a soft ease that is slower than a tap's response.
-  const SLIDE_MS = 340, SLIDE_MIN_MS = 240, SLIDE_BACK_MS = 300;
+  // Page swipes are snappier; the calendar keeps its own, slightly longer timing.
+  const SLIDE_MS = 280, SLIDE_MIN_MS = 200, SLIDE_BACK_MS = 260;
+  const CAL_SLIDE = { max: 340, min: 240, back: 300, start: 1.8 };
   function swipeVelocity() {
     let pts = [];
     return {
       reset() { pts = []; },
       push(x) { const t = performance.now(); pts.push([x, t]); while (pts.length > 2 && t - pts[0][1] > 100) pts.shift(); },
-      // px per ms over the last ~100ms; 0 if the finger rested before lifting
-      get() { if (pts.length < 2 || performance.now() - pts[pts.length - 1][1] > 80) return 0; const a = pts[0], z = pts[pts.length - 1]; return (z[0] - a[0]) / Math.max(1, z[1] - a[1]); }
+      // px per ms: the fastest stretch of the last ~100ms (a finger eases off in the instant it lifts, so the
+      // plain average undersold the swipe and the slide took over slower than the finger); 0 if it rested
+      get() {
+        if (pts.length < 2 || performance.now() - pts[pts.length - 1][1] > 80) return 0;
+        const z = pts[pts.length - 1];
+        let best = (z[0] - pts[0][0]) / Math.max(1, z[1] - pts[0][1]);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const span = z[1] - pts[i][1];
+          if (span >= 24) { const v = (z[0] - pts[i][0]) / span; if (Math.abs(v) > Math.abs(best)) best = v; }
+          const prevSpan = pts[i][1] - pts[0][1];
+          if (prevSpan >= 24) { const v = (pts[i][0] - pts[0][0]) / prevSpan; if (Math.abs(v) > Math.abs(best) && Math.sign(v) === Math.sign(best || v)) best = v; }
+        }
+        return best;
+      }
     };
   }
   // Release: commit past 35% of the width, or on a clear flick in the swipe's direction. Flicks finish a little sooner.
@@ -867,14 +881,14 @@
   // jumped ahead (seen in a screen recording: two frozen frames, then a 161pt leap). Here the clock starts on
   // the first frame actually drawn, and the curve starts at the finger's own speed and slows to a stop, so
   // there is no kick when the finger lifts.
-  function glide(from, to, v, maxMs, apply, done) {
+  function glide(from, to, v, maxMs, apply, done, minMs = SLIDE_MIN_MS, aMin = 2.4) {
     const D = to - from, dist = Math.abs(D);
     const speed = Math.max(0, v * Math.sign(D || 1));
-    const T = Math.max(SLIDE_MIN_MS, Math.min(maxMs, speed > 0 ? 3 * dist / speed : maxMs));
+    const T = Math.max(minMs, Math.min(maxMs, speed > 0 ? 3 * dist / speed : maxMs));
     // cubic that ends at speed 0 and starts at the finger's speed, but never slower than a brisk start
-    // (a >= 1.8), so the slide only ever decelerates and never creeps up to speed (that read as slow motion);
+    // (a >= aMin), so the slide only ever decelerates and never creeps up to speed (that read as slow motion);
     // a <= 3 keeps it from overshooting
-    const a = dist ? Math.max(1.8, Math.min(3, speed * T / dist)) : 0;
+    const a = dist ? Math.max(aMin, Math.min(3, speed * T / dist)) : 0;
     const ease = u => a * u + (3 - 2 * a) * u * u + (a - 2) * u * u * u;
     let t0 = null;
     const step = now => {
@@ -937,7 +951,7 @@
     }, { passive: false });
     const springBack = v => {
       busy = true;
-      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => place(x), reset);
+      glide(curX, 0, v || 0, CAL_SLIDE.back, x => place(x), reset, CAL_SLIDE.min, CAL_SLIDE.start);
     };
     cal.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -957,9 +971,9 @@
       // Summary is redrawn then, to keep the slide smooth. The rest (Shifts list, Goals) follows when it ends.
       let early = false;
       const switchSummary = () => { pillsNeedScroll = true; monthFilter = lastSpecificMonth = target; renderSummary(); pillsNeedScroll = false; };
-      glide(curX, out, v, SLIDE_MS, (x, e) => { place(x, h0 + (h1 - h0) * e); if (!early) { early = true; setTimeout(switchSummary, 0); } }, () => {
+      glide(curX, out, v, CAL_SLIDE.max, (x, e) => { place(x, h0 + (h1 - h0) * e); if (!early) { early = true; setTimeout(switchSummary, 0); } }, () => {
         calHold = false; calSwiping = true; renderDataViews(); calSwiping = false; reset();
-      });
+      }, CAL_SLIDE.min, CAL_SLIDE.start);
     });
     cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(0); mode = null; });
     cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
