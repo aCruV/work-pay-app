@@ -850,7 +850,7 @@
   });
   // Shared feel for both swipes: the finger is followed once per frame, a quick flick counts even
   // when short, and the slide settles with a soft ease that is slower than a tap's response.
-  const SLIDE_MS = 460, SLIDE_BACK_MS = 380;
+  const SLIDE_MS = 340, SLIDE_MIN_MS = 240, SLIDE_BACK_MS = 300;
   function swipeVelocity() {
     let pts = [];
     return {
@@ -870,9 +870,11 @@
   function glide(from, to, v, maxMs, apply, done) {
     const D = to - from, dist = Math.abs(D);
     const speed = Math.max(0, v * Math.sign(D || 1));
-    const T = Math.max(300, Math.min(maxMs, speed > 0 ? 3 * dist / speed : maxMs));
-    // cubic with start speed = finger speed and end speed 0 (a <= 3 keeps it from overshooting)
-    const a = dist ? Math.min(3, speed * T / dist) : 0;
+    const T = Math.max(SLIDE_MIN_MS, Math.min(maxMs, speed > 0 ? 3 * dist / speed : maxMs));
+    // cubic that ends at speed 0 and starts at the finger's speed, but never slower than a brisk start
+    // (a >= 1.8), so the slide only ever decelerates and never creeps up to speed (that read as slow motion);
+    // a <= 3 keeps it from overshooting
+    const a = dist ? Math.max(1.8, Math.min(3, speed * T / dist)) : 0;
     const ease = u => a * u + (3 - 2 * a) * u * u + (a - 2) * u * u * u;
     let t0 = null;
     const step = now => {
