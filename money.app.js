@@ -266,6 +266,8 @@
   const ICON_CLIP = '<svg class="pill-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>';
   const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>';
   const ICON_IMAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg>';
+  const ICON_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>';
+  const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   const ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 
   let paychecks = [];          // details of the signed-in user's files, newest data from the cloud
@@ -274,6 +276,7 @@
   let pcUploading = null;      // month currently uploading, shown as a row
   const pcBlobCache = new Map();
   let pcViewUrl = null;
+  let pcZoomEl = null;         // the full-screen picture layer, while open
 
   let remoteReady = false;
 
@@ -1612,7 +1615,115 @@
   }
 
   // ---- viewing one file: preview, save, delete ----
-  function revokePaycheckView() { if (pcViewUrl) { URL.revokeObjectURL(pcViewUrl); pcViewUrl = null; } }
+  function revokePaycheckView() { closePaycheckZoom(true); if (pcViewUrl) { URL.revokeObjectURL(pcViewUrl); pcViewUrl = null; } }
+
+  // ---- full-screen picture: pinch or double-tap to zoom, drag to move, swipe down or ✕ to close ----
+  // The rest of the app stays zoom-locked; this layer reads the fingers itself (its own pinch, not the
+  // browser's), so only the picture grows. PDFs open full screen in the browser's own PDF view.
+  function openPaycheckZoom(url, p) {
+    closePaycheckZoom(true);
+    const isPdf = p.type === 'application/pdf';
+    const el = document.createElement('div');
+    el.className = 'pc-zoom';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-label', p.name);
+    el.innerHTML = (isPdf
+      ? `<iframe class="pc-zoom-pdf" src="${url}" title="${escapeHtml(p.name)}"></iframe>`
+      : `<img class="pc-zoom-img" src="${url}" alt="${escapeHtml(p.name)}" draggable="false">`)
+      + `<button type="button" class="pc-zoom-close" aria-label="${escapeHtml(t('pcClose'))}">${ICON_X}</button>`;
+    document.body.appendChild(el);
+    pcZoomEl = el;
+    el.querySelector('.pc-zoom-close').addEventListener('click', () => closePaycheckZoom());
+    if (!isPdf) attachZoomGestures(el, el.querySelector('.pc-zoom-img'));
+    requestAnimationFrame(() => el.classList.add('open'));
+  }
+  function closePaycheckZoom(now) {
+    const el = pcZoomEl;
+    if (!el) return;
+    pcZoomEl = null;
+    if (now || reduceMotion.matches) { el.remove(); return; }
+    el.classList.remove('open');
+    el.classList.add('closing');
+    setTimeout(() => el.remove(), 220);
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && pcZoomEl) { e.stopPropagation(); closePaycheckZoom(); } }, true);
+  window.addEventListener('popstate', () => closePaycheckZoom(true));
+
+  function attachZoomGestures(el, img) {
+    const MAX = 5, DOUBLE = 2.5;
+    let s = 1, tx = 0, ty = 0, raf = 0, mode = null, st = null, lastTap = null;
+    const apply = ms => { img.style.transition = ms ? `transform ${ms}ms var(--ease-out)` : 'none'; img.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${s})`; };
+    const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; apply(0); }); };
+    const rel = (x, y) => { const r = el.getBoundingClientRect(); return { x: x - r.left - r.width / 2, y: y - r.top - r.height / 2 }; };
+    const clampPan = () => {
+      const bx = Math.max(0, (img.offsetWidth * s - el.clientWidth) / 2), by = Math.max(0, (img.offsetHeight * s - el.clientHeight) / 2);
+      tx = Math.max(-bx, Math.min(bx, tx)); ty = Math.max(-by, Math.min(by, ty));
+    };
+    // keeps the spot under the fingers (f, measured from the screen's centre) in place while scaling
+    const zoomTo = (ns, f) => { ns = Math.max(1, Math.min(MAX, ns)); tx = f.x - (f.x - tx) * ns / s; ty = f.y - (f.y - ty) * ns / s; s = ns; };
+    const settle = () => { if (s <= 1.01) { s = 1; tx = 0; ty = 0; } clampPan(); apply(240); };
+    const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = t => rel((t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
+    const begin = e => {
+      const t = e.touches;
+      if (t.length >= 2) { mode = 'pinch'; st = { d: dist(t), s, tx, ty, m: mid(t) }; }
+      else { mode = s > 1 ? 'pan' : 'drag'; st = { x: t[0].clientX, y: t[0].clientY, tx, ty, at: performance.now(), moved: false }; }
+    };
+    el.addEventListener('touchstart', e => {
+      if (e.target.closest('.pc-zoom-close')) return;
+      e.preventDefault();
+      begin(e);
+    }, { passive: false });
+    el.addEventListener('touchmove', e => {
+      if (!mode) return;
+      e.preventDefault();
+      const t = e.touches;
+      if (mode === 'pinch' && t.length >= 2) {
+        const m = mid(t), ns = Math.max(0.8, Math.min(MAX, st.s * dist(t) / st.d));
+        tx = m.x - (st.m.x - st.tx) * ns / st.s; ty = m.y - (st.m.y - st.ty) * ns / st.s; s = ns;
+      } else if (t.length === 1) {
+        const dx = t[0].clientX - st.x, dy = t[0].clientY - st.y;
+        if (Math.abs(dx) > 8 || Math.abs(dy) > 8) st.moved = true;
+        if (mode === 'pan') { tx = st.tx + dx; ty = st.ty + dy; }
+        else if (mode === 'drag') { tx = 0; ty = dy; el.style.setProperty('--zoom-bg', String(Math.max(0.35, 1 - Math.abs(dy) / 450))); }
+      }
+      later();
+    }, { passive: false });
+    el.addEventListener('touchend', e => {
+      if (!mode) return;
+      e.preventDefault();
+      if (e.touches.length) { begin(e); return; } // one finger lifted from a pinch: keep moving with the other
+      const m = mode; mode = null;
+      if (m === 'drag' && st.moved) {
+        // swipe down (or up) far enough at normal size closes it; otherwise it springs back
+        if (Math.abs(ty) > 110) { el.style.setProperty('--zoom-bg', '0'); ty = ty > 0 ? el.clientHeight : -el.clientHeight; apply(220); closePaycheckZoom(); return; }
+        ty = 0; el.style.setProperty('--zoom-bg', '1'); apply(220); return;
+      }
+      if (m !== 'pinch' && !st.moved && performance.now() - st.at < 300) {
+        const now = performance.now(), here = rel(st.x, st.y);
+        if (lastTap && now - lastTap.at < 320 && Math.hypot(here.x - lastTap.x, here.y - lastTap.y) < 40) {
+          lastTap = null;
+          if (s > 1) { s = 1; tx = 0; ty = 0; } else { zoomTo(DOUBLE, here); clampPan(); }
+          apply(260);
+          return;
+        }
+        lastTap = { at: now, x: here.x, y: here.y };
+        return;
+      }
+      settle();
+    }, { passive: false });
+    el.addEventListener('touchcancel', () => { mode = null; el.style.setProperty('--zoom-bg', '1'); settle(); });
+    // computers: double-click to zoom, wheel to zoom around the pointer, drag to move
+    el.addEventListener('dblclick', e => { if (e.target.closest('.pc-zoom-close')) return; if (s > 1) { s = 1; tx = 0; ty = 0; } else { zoomTo(DOUBLE, rel(e.clientX, e.clientY)); clampPan(); } apply(260); });
+    el.addEventListener('wheel', e => { e.preventDefault(); zoomTo(s * Math.exp(-e.deltaY * 0.002), rel(e.clientX, e.clientY)); clampPan(); apply(0); }, { passive: false });
+    let drag = null;
+    el.addEventListener('mousedown', e => { if (e.button || s <= 1 || e.target.closest('.pc-zoom-close')) return; drag = { x: e.clientX, y: e.clientY, tx, ty }; e.preventDefault(); });
+    el.addEventListener('mousemove', e => { if (!drag) return; tx = drag.tx + e.clientX - drag.x; ty = drag.ty + e.clientY - drag.y; later(); });
+    const endDrag = () => { if (drag) { drag = null; settle(); } };
+    el.addEventListener('mouseup', endDrag);
+    el.addEventListener('mouseleave', endDrag);
+  }
   function openPaycheckViewer(p) {
     sheetMode = 'paycheck'; editingId = null;
     revokePaycheckView();
@@ -1623,22 +1734,30 @@
     loadPaycheckBlob(p).then(blob => {
       if (sheetMode !== 'paycheck') return;
       pcViewUrl = URL.createObjectURL(blob);
-      const preview = p.type === 'application/pdf'
+      const isPdf = p.type === 'application/pdf';
+      const preview = isPdf
         ? `<iframe class="pc-preview pc-pdf" src="${pcViewUrl}" title="${escapeHtml(p.name)}"></iframe>`
-        : `<img class="pc-preview" src="${pcViewUrl}" alt="${escapeHtml(p.name)}">`;
+        : `<button type="button" class="pc-preview-btn" id="pcZoomOpen" aria-label="${escapeHtml(t('pcFullScreen'))}"><img class="pc-preview" src="${pcViewUrl}" alt="${escapeHtml(p.name)}"><span class="pc-expand">${ICON_EXPAND}</span></button>`;
       $('sheetBody').innerHTML = `${preview}
         <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></div></div></div>
         <div class="btn-stack" style="margin-top:12px;">
+          ${isPdf ? `<button type="button" class="btn-plain btn-block" id="pcZoomOpen">${escapeHtml(t('pcFullScreen'))}</button>` : ''}
           <button type="button" class="btn-plain btn-block" id="pcSaveBtn">${escapeHtml(t('pcDownload'))}</button>
           <button type="button" class="btn-danger btn-block" id="pcDeleteBtn">${escapeHtml(t('pcDelete'))}</button>
         </div>`;
+      $('pcZoomOpen').addEventListener('click', () => openPaycheckZoom(pcViewUrl, p));
       $('pcSaveBtn').addEventListener('click', () => deliverFile(blob, paycheckFileName(p)));
+      // Deleting closes the viewer and drops the file from the list at once, instead of waiting for the
+      // cloud to confirm (which can take a moment on a phone). If the cloud refuses, the file comes back.
       $('pcDeleteBtn').addEventListener('click', () => {
         if (!confirm(t('pcConfirmDelete').replace('{name}', p.name))) return;
-        $('pcDeleteBtn').disabled = true;
-        deletePaycheckDocs(currentUser.uid, p)
-          .then(() => { pcBlobCache.delete(p.id); closeSheetOverlay(); showToast(t('pcDeleted')); })
-          .catch(err => { console.error('Paycheck delete failed:', err); $('pcDeleteBtn').disabled = false; showToast(t('pcDeleteFailed')); });
+        const uid = currentUser.uid;
+        paychecks = paychecks.filter(x => x.id !== p.id);
+        pcBlobCache.delete(p.id);
+        closeSheetOverlay();
+        renderDataViews();
+        showToast(t('pcDeleted'));
+        deletePaycheckDocs(uid, p).catch(err => { console.error('Paycheck delete failed:', err); showToast(t('pcDeleteFailed')); });
       });
     }).catch(err => {
       console.error('Opening paycheck failed:', err);
