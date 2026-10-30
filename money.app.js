@@ -262,8 +262,12 @@
   const PC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
   // Photos bigger than this, or wider/taller than PC_IMG_MAX px, are scaled down (still easy to read).
   const PC_SHRINK_OVER = 1.5 * 1024 * 1024, PC_IMG_MAX = 2200;
-  const PC_REMIND_DAY = 10;
-  const PC_SAVE_WAIT_MS = 30000; // after this, "Saving…" gives way to a "taking longer than usual" message // salaries are due by the 9th, so the slip should be in by the 10th
+  // A photo may start bigger than PC_MAX_BYTES (it gets shrunk), but not bigger than this: reading and
+  // decoding a much larger file could run a phone out of memory.
+  const PC_MAX_PHOTO_BYTES = 30 * 1024 * 1024;
+  const PC_REMIND_DAY = 10; // salaries are due by the 9th, so the slip should be in by the 10th
+  const PC_SAVE_WAIT_MS = 30000; // after this, "Saving…" gives way to a "taking longer than usual" message
+  const PC_SLOT_WAIT_MS = 15000; // how long to wait for the server to say which slot is free
   const ICON_CLIP = '<svg class="pill-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>';
   const ICON_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>';
   const ICON_IMAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></svg>';
@@ -281,6 +285,9 @@
   let pcZoomEl = null;         // the full-screen picture layer, while open
 
   let remoteReady = false;
+  // the big Summary total's fitting (see fitTotal); declared up here because the Summary can be drawn early
+  const TOTAL_MIN_PX = 22;
+  let fitTotalTimer = null, totalProbe = null;
 
   // The data as the cloud last confirmed it. Comparing it with `state` shows which changes were
   // made on this device, so they're merged into whatever other devices saved meanwhile instead of
@@ -735,12 +742,40 @@
     const months = monthFilter === 'all' ? allMonths() : [monthFilter];
     const otherIncome = months.reduce((sum, m) => sum + additionsTotal(m), 0);
 
-    countTo($('sumTotal'), workPay + otherIncome, money);
+    const totalEl = $('sumTotal'), total = workPay + otherIncome;
+    fitTotal([money(typeof totalEl._countValue === 'number' ? totalEl._countValue : total), money(total)]);
+    countTo(totalEl, total, money);
+    clearTimeout(fitTotalTimer);
+    fitTotalTimer = setTimeout(() => fitTotal([money(total)]), 600);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
     renderCalendar();
     renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
     renderPaychecks();
   }
+
+  // The big total shrinks to fit beside the eye button when it's long (e.g. ₪183,740.34 under "All time" on a
+  // narrow phone) instead of running under the button; normal totals keep the full size. It's measured with an
+  // invisible copy (same font and digit widths) and sized for the widest number a count-up or count-down will
+  // pass through, then for the final number once the count is over.
+  function fitTotal(texts) {
+    const el = $('sumTotal');
+    const room = el.clientWidth;
+    if (!room) return; // Summary isn't on screen; it's fitted again when it's shown
+    if (!totalProbe) {
+      totalProbe = document.createElement('div');
+      totalProbe.className = 'balance-value';
+      totalProbe.setAttribute('aria-hidden', 'true');
+      totalProbe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;top:0;left:0;pointer-events:none;';
+    }
+    // the copy is in the page only while measuring, then taken out again
+    el.parentElement.appendChild(totalProbe);
+    const full = parseFloat(getComputedStyle(totalProbe).fontSize);
+    const widest = Math.max(...texts.map(x => { totalProbe.textContent = x; return totalProbe.scrollWidth; }));
+    totalProbe.remove();
+    el.style.fontSize = widest > room ? Math.max(TOTAL_MIN_PX, Math.floor(full * room / widest * 100) / 100) + 'px' : '';
+  }
+  function refitTotal() { fitTotal([$('sumTotal').textContent]); }
+  window.addEventListener('resize', refitTotal);
 
   // "How your pay adds up": one line per kind of pay that actually happened in the period
   // (no empty lines), then a total of all the money and all the hours.
@@ -842,7 +877,8 @@
     return new Date(2026, 9, 4 + dow).toLocaleDateString(he ? 'he-IL' : 'en', { weekday: he ? 'narrow' : 'short' });
   }
   const shortHours = h => String(Math.round(h * 100) / 100);
-  function hrsText(v) { return getLang() === 'he' ? v + ' ' + t('hoursUnit') : v + t('hoursUnit'); }
+  // Hebrew puts a (non-breaking) space before the unit, so "8.00 ש׳" never splits across two lines.
+  function hrsText(v) { return getLang() === 'he' ? v + '\u00a0' + t('hoursUnit') : v + t('hoursUnit'); }
   // One month of the Luach (weekday row + day grid). The swipe also uses it to draw the month beside the current one.
   function monthGridHtml(month) {
     const [y, m] = month.split('-').map(Number);
@@ -968,14 +1004,17 @@
     // The first frame advances by the real time since the finger lifted (right at 60Hz or 120Hz), but by no
     // more than one 60Hz frame, so a late first frame can never turn into a jump.
     const lifted = performance.now();
-    let t0 = null;
+    let t0 = null, stopped = false;
     const step = now => {
+      if (stopped) return;
       if (t0 === null) t0 = Math.max(Math.min(lifted, now), now - 16.7);
       const u = Math.min(1, (now - t0) / T), e = ease(u);
       apply(from + D * e, e);
       if (u < 1) requestAnimationFrame(step); else done();
     };
     requestAnimationFrame(step);
+    // stop() halts the slide where it is (its "done" step never runs)
+    return { stop() { stopped = true; } };
   }
   // A drag only becomes a sideways swipe once it is clearly sideways, so scrolling never flips pages by accident.
   const SWIPE_START = 14, SWIPE_AXIS = 1.6;
@@ -1287,9 +1326,11 @@
       let data;
       try {
         data = JSON.parse(reader.result);
-        if (!data || typeof data !== 'object' || !data.settings) throw new Error(t('alertImportInvalid'));
+        if (!data || typeof data !== 'object' || Array.isArray(data) || !data.settings) throw new Error('not a backup');
       } catch (err) {
-        alert(t('alertImportFail') + err.message);
+        // A plain message in the app's language; the technical reason (e.g. a JSON parse error) only goes to the console.
+        console.warn('Import refused:', err && err.message);
+        alert(t('alertImportFail') + t('alertImportInvalid'));
         return;
       }
       if (!confirm(t('confirmImport'))) return;
@@ -1519,10 +1560,14 @@
   }
 
   // Reads, checks and (for big photos) shrinks a picked file. Resolves { bytes, type, name } or rejects with a message key.
+  // Only the first bytes are read before the type and size are checked, so a wrong or huge file (say a long
+  // video picked by mistake) is refused at once instead of being loaded into the phone's memory first.
   async function preparePaycheckFile(file) {
-    let bytes = new Uint8Array(await file.arrayBuffer());
-    let type = sniffType(bytes);
+    let type = sniffType(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
     if (!type) throw new Error('pcBadType');
+    if (type === 'application/pdf' && file.size > PC_MAX_BYTES) throw new Error('pcTooBig');
+    if (type !== 'application/pdf' && file.size > PC_MAX_PHOTO_BYTES) throw new Error('pcTooBigPhoto');
+    let bytes = new Uint8Array(await file.arrayBuffer());
     let name = String(file.name || 'paycheck').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || 'paycheck';
     if (type !== 'application/pdf' && (bytes.length > PC_SHRINK_OVER || await imageTooLarge(file))) {
       const small = await shrinkImage(new Blob([bytes], { type }));
@@ -1546,11 +1591,25 @@
     });
   }
 
+  // Which of the month's 3 slots is free: 1-3, 0 = month full, -1 = can't tell. Asked of the server, so it is
+  // right even before this device's list has loaded (just after signing in on a new phone) and if another
+  // device added a file meanwhile. If the server can't be reached in time, the list on this device is used.
+  async function freePaycheckSlot(uid, month) {
+    const lookup = Promise.all([1, 2, 3].map(n => paychecksRef(uid).doc(`${month}-${n}`).get({ source: 'server' })))
+      .then(snaps => { const i = snaps.findIndex(x => !x.exists); return i < 0 ? 0 : i + 1; });
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), PC_SLOT_WAIT_MS));
+    try { return await Promise.race([lookup, timeout]); }
+    catch (err) {
+      console.warn('Paycheck slot check failed:', err && (err.code || err.message));
+      if (!paychecksLoaded) return -1;
+      const taken = paychecksFor(month).map(p => p.slot);
+      return [1, 2, 3].find(x => !taken.includes(x)) || 0;
+    }
+  }
+
   async function uploadPaycheck(month, file) {
     if (!currentUser) return;
-    const taken = paychecksFor(month).map(p => p.slot);
-    const slot = [1, 2, 3].find(s => !taken.includes(s));
-    if (!slot) { showToast(t('pcFull')); return; }
+    if (paychecksLoaded && paychecksFor(month).length >= PC_MAX_FILES) { showToast(t('pcFull')); return; }
     if (navigator.onLine === false) { showToast(t('pcOffline')); return; }
     let prepared;
     try { prepared = await preparePaycheckFile(file); }
@@ -1559,32 +1618,41 @@
     const chunks = Math.ceil(bytes.length / PC_CHUNK);
     if (chunks > PC_MAX_CHUNKS) { showToast(t('pcTooBig')); return; }
     const uid = currentUser.uid;
-    const ref = paychecksRef(uid).doc(`${month}-${slot}`);
-    const batch = db.batch();
-    for (let i = 0; i < chunks; i++) {
-      batch.set(ref.collection('chunks').doc(String(i)), { d: firebase.firestore.Blob.fromUint8Array(bytes.subarray(i * PC_CHUNK, (i + 1) * PC_CHUNK)) });
-    }
-    // the details doc is part of the same batch, so it only exists once every piece is saved
-    batch.set(ref, { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     pcSaving.add(month);
     renderPaychecks();
-    // A connection that looks online but can't reach the server would keep "Saving…" spinning forever, so the
-    // wait is capped. The save itself can't be cancelled; it keeps going and finishes when the connection does.
-    let gaveUp = false;
-    const commit = batch.commit().then(() => {
-      pcBlobCache.set(ref.id, new Blob([bytes], { type }));
-      if (gaveUp) showToast(t('pcSaved'));
-      return 'ok';
-    }, err => {
-      console.error('Paycheck upload failed:', err);
-      if (gaveUp) showToast(t('pcUploadFailed'));
-      return 'fail';
-    });
-    const result = await Promise.race([commit, new Promise(res => setTimeout(() => res('slow'), PC_SAVE_WAIT_MS))]);
-    if (result === 'slow') gaveUp = true;
-    showToast(t(result === 'ok' ? 'pcSaved' : result === 'fail' ? 'pcUploadFailed' : 'pcSlow'));
-    pcSaving.delete(month);
-    renderPaychecks();
+    const finish = key => { showToast(t(key)); pcSaving.delete(month); renderPaychecks(); };
+    const began = Date.now(); // the slot check and the save share one time limit (PC_SAVE_WAIT_MS)
+    // Two tries: if another device took the free slot between the check and the save (the server refuses
+    // writing over an existing file), the slots are checked again once.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const slot = await freePaycheckSlot(uid, month);
+      if (slot === 0) return finish('pcFull');
+      if (slot < 0) return finish('pcUploadFailed');
+      const ref = paychecksRef(uid).doc(`${month}-${slot}`);
+      const batch = db.batch();
+      for (let i = 0; i < chunks; i++) {
+        batch.set(ref.collection('chunks').doc(String(i)), { d: firebase.firestore.Blob.fromUint8Array(bytes.subarray(i * PC_CHUNK, (i + 1) * PC_CHUNK)) });
+      }
+      // the details doc is part of the same batch, so it only exists once every piece is saved
+      batch.set(ref, { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      // A connection that looks online but can't reach the server would keep "Saving…" spinning forever, so the
+      // wait is capped. The save itself can't be cancelled; it keeps going and finishes when the connection does.
+      let gaveUp = false;
+      const commit = batch.commit().then(() => {
+        pcBlobCache.set(ref.id, new Blob([bytes], { type }));
+        if (gaveUp) showToast(t('pcSaved'));
+        return 'ok';
+      }, err => {
+        console.error('Paycheck upload failed:', err);
+        if (gaveUp) showToast(t('pcUploadFailed'));
+        return err && err.code === 'permission-denied' ? 'taken' : 'fail';
+      });
+      const wait = Math.max(5000, PC_SAVE_WAIT_MS - (Date.now() - began));
+      const result = await Promise.race([commit, new Promise(res => setTimeout(() => res('slow'), wait))]);
+      if (result === 'slow') { gaveUp = true; return finish('pcSlow'); }
+      if (result === 'taken' && attempt === 1) continue;
+      return finish(result === 'ok' ? 'pcSaved' : 'pcUploadFailed');
+    }
   }
 
   async function loadPaycheckBlob(p) {
@@ -1622,7 +1690,8 @@
     const on = !!currentUser && monthFilter !== 'all';
     wrap.classList.toggle('hidden', !on);
     renderPaycheckReminder(reminder);
-    if (!on) return;
+    // Under "All time" (or signed out) the section is hidden and emptied, so no other month's files linger.
+    if (!on) { $('paycheckList').innerHTML = ''; return; }
     const files = paychecksFor(monthFilter);
     let html = files.map(p => `<button type="button" class="list-row pc-row" data-pc="${escapeHtml(p.id)}">
         <span class="pc-ico">${p.type === 'application/pdf' ? ICON_FILE : ICON_IMAGE}</span>
@@ -2375,11 +2444,13 @@
   }
 
   // ---- tabs ----
+  let stopTabSlide = null; // set by the page swipe below: stops a swipe in progress (a tab tap beats it)
   function switchTab(tab) {
     activeTab = tab;
     // 'swipe-page' (set while a swipe drags a page in) stops the page's fade-in; it is cleared once the page is hidden again.
     document.querySelectorAll('.tab-page').forEach(p => { if (p.id !== 'tab-' + tab) { p.classList.add('hidden'); p.classList.remove('swipe-page'); } });
     $('tab-' + tab).classList.remove('hidden');
+    if (tab === 'summary') refitTotal();
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     $('fab').classList.toggle('hidden', tab !== 'shifts');
     $('content').scrollTop = 0;
@@ -2410,6 +2481,7 @@
     }
   }
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (stopTabSlide) stopTabSlide();
     const same = btn.dataset.tab === activeTab;
     switchTab(btn.dataset.tab);
     if (!same) replayEntrance(btn.dataset.tab);
@@ -2421,6 +2493,7 @@
   (() => {
     const content = $('content'), TABS = ['summary', 'shifts', 'goals', 'settings'], vel = swipeVelocity();
     let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, cur = null, side = null, sideTab = null, busy = false, swallowClick = false, raf = 0;
+    let slide = null; // the slide running after the finger lifted (to the next tab, or springing back)
     // measured once when the finger lands, so moving frames never ask the page for sizes
     let w = 0, padTop = 0, padLeft = '', viewH = 0, sideTop = -1;
     const target = d => TABS[TABS.indexOf(activeTab) + ((d < 0) !== isRtl() ? 1 : -1)];
@@ -2446,6 +2519,7 @@
       sideTop = content.scrollTop;
       Object.assign(side.style, { position: 'absolute', top: sideTop + padTop + 'px', left: padLeft, width: cur.offsetWidth + 'px', height: viewH + 'px', overflow: 'hidden', willChange: 'transform' });
       side.classList.remove('hidden');
+      if (tab === 'summary') refitTotal();
     };
     const W = () => w;
     const frame = () => {
@@ -2482,7 +2556,19 @@
     const springBack = v => {
       const s = side, off = dx < 0 ? W() : -W();
       busy = true;
-      glide(curX, 0, v || 0, SLIDE_BACK_MS, x => { move(cur, x); if (s) move(s, x + off); }, () => { clear(cur); if (side === s) dropSide(); busy = false; });
+      slide = glide(curX, 0, v || 0, SLIDE_BACK_MS, x => { move(cur, x); if (s) move(s, x + off); }, () => { slide = null; clear(cur); if (side === s) dropSide(); busy = false; });
+    };
+    // A tap on the tab bar while a swipe is moving wins: the swipe stops where it is, both pages go back to
+    // normal, and the tab bar then opens the tapped tab (before, the slide finished and overrode the tap).
+    stopTabSlide = () => {
+      if (!slide && mode !== 'swipe') return;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (slide) { slide.stop(); slide = null; }
+      mode = 'off';
+      if (cur) clear(cur);
+      if (side) clear(side);
+      side = sideTab = null;
+      busy = false;
     };
     content.addEventListener('touchend', () => {
       if (mode !== 'swipe') { mode = null; return; }
@@ -2498,7 +2584,8 @@
       busy = true;
       // The tab bar highlight moves the moment the finger lifts, together with the page, not after the slide.
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === next));
-      glide(curX, out, v, SLIDE_MS, x => { move(cur, x); move(side, x + off); }, () => {
+      slide = glide(curX, out, v, SLIDE_MS, x => { move(cur, x); move(side, x + off); }, () => {
+        slide = null;
         // The pulled-in page sits at the top of the screen; switchTab scrolls to the top, so it stays put.
         const old = cur, s = side;
         side = sideTab = null;
@@ -3165,8 +3252,10 @@
     }));
     $('sheetTitle').textContent = t('weekTitle');
     $('sheetSave').style.visibility = 'hidden';
+    // The name and the time are isolated from each other, so a name in the other script (e.g. a Hebrew
+    // name in the English app) can't flip the order of the times next to it (22:00–06:00 shown as 06:00–22:00).
     const tplChips = state.templates.map(tpl =>
-      `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name)} <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
+      `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}"><bdi>${escapeHtml(tpl.name)}</bdi> <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
     $('sheetBody').innerHTML = `
       <div class="week-nav">
         <button type="button" class="week-nav-btn" id="weekPrevBtn" aria-label="${escapeHtml(t('weekPrev'))}" ${weekOffset <= -WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
