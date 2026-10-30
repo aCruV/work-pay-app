@@ -3522,6 +3522,7 @@
     const tick = () => {
       const sec = lockRemainingSec();
       $('authSubmitBtn').disabled = authBusy || sec > 0;
+      $('authSubmitBtn').classList.toggle('busy', authBusy);
       if (sec > 0) {
         authMsg(t('authLocked').replace('{s}', sec));
         showingLock = true;
@@ -3751,6 +3752,9 @@
   // sweep finish (under a second) so the logo never cuts off half drawn; SPLASH_MAX_WAIT_MS caps that.
   const SPLASH_MIN_MS = 700;
   const SPLASH_MAX_WAIT_MS = 1500;
+  const SPLASH_AGAIN_MAX_MS = 10000;
+  // A copy taken before the first launch screen goes, so signing in from the form can play it again.
+  const splashTemplate = $('splash') ? $('splash').cloneNode(true) : null;
   let splashHidden = false;
   function hideSplash() {
     if (splashHidden) return;
@@ -3763,7 +3767,18 @@
     Promise.race([Promise.all([minWait, ...entrance.map(a => a.finished.catch(() => {}))]), cap]).then(() => {
       el.classList.add('done');
       setTimeout(() => el.remove(), 450);
+      if (el.classList.contains('again')) replayEntrance(activeTab);
     });
+  }
+  // After signing in from the form, the launch screen fades in over it and covers the wait for the
+  // account's data; the first snapshot then opens the app the same way as a normal launch.
+  function showSplashAgain() {
+    if (!splashTemplate || $('splash')) return;
+    const el = splashTemplate.cloneNode(true);
+    el.classList.add('again');
+    document.body.prepend(el);
+    splashHidden = false;
+    setTimeout(hideSplash, SPLASH_AGAIN_MAX_MS); // never left covering the screen if the data never arrives
   }
 
   function hideAuthScreen() {
@@ -3836,6 +3851,8 @@
         currentUser = user;
         remoteReady = false;
         $('accountEmail').textContent = user.email || '';
+        const fromForm = !$('authScreen').classList.contains('hidden') && !$('authScreen').classList.contains('loading');
+        if (fromForm) showSplashAgain();
         startSync(user);
         startPaycheckSync(user);
       } else {
