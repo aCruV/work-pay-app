@@ -24,6 +24,11 @@
     --splash-hands: url(#splashGoldDeep);
     --ob-person: #0B1D3C;
     --ob-hands: url(#obGoldDeep);
+    --au-person: #0B1D3C;
+    --au-hands: url(#auGoldDeep);
+    --mark-shadow: drop-shadow(0 12px 18px rgba(11,29,60,.18));
+    --seg-thumb: #ffffff;
+    --seg-thumb-shadow: 0 1px 3px rgba(20,30,60,.16);
     --card: #ffffff;
     --card2: #f6f7f9;
     --text: #1a1b1f;
@@ -66,6 +71,11 @@
       --splash-hands: url(#splashGold);
       --ob-person: url(#obGold);
       --ob-hands: url(#obGold);
+      --au-person: url(#auGold);
+      --au-hands: url(#auGold);
+      --mark-shadow: none;
+      --seg-thumb: #636366;
+      --seg-thumb-shadow: none;
       --card: #1c1c1e;
       --card2: #2c2c2e;
       --text: #f2f2f7;
@@ -102,6 +112,11 @@
     --splash-hands: url(#splashGold);
     --ob-person: url(#obGold);
     --ob-hands: url(#obGold);
+    --au-person: url(#auGold);
+    --au-hands: url(#auGold);
+    --mark-shadow: none;
+    --seg-thumb: #636366;
+    --seg-thumb-shadow: none;
     --card: #1c1c1e;
     --card2: #2c2c2e;
     --text: #f2f2f7;
@@ -320,8 +335,8 @@
   .cg-bar i.done { background: var(--green); }
   .cg-rem { font-size: 12.5px; color: var(--muted); }
   /* other profiles seen from the open one: calendar rings, muted lines in the list, clash warnings */
-  .luach-oth { position: absolute; top: 7px; left: min(calc(50% + 12px), calc(100% - 9px)); display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
-  [dir="rtl"] .luach-oth { left: auto; right: min(calc(50% + 12px), calc(100% - 9px)); }
+  /* before the date number in reading order: on its left in English, on its right in Hebrew */
+  .luach-oth { position: absolute; top: 7px; inset-inline-end: min(calc(50% + 12px), calc(100% - 9px)); display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
   .luach-oth i { display: block; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--pf); box-sizing: border-box; }
   .luach-legend i.luach-oth-key { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--pf); background: none; box-sizing: border-box; }
   .other-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 14px; border: none; background: none; font: inherit; font-size: 13.5px; color: var(--muted); text-align: start; cursor: pointer; }
@@ -430,16 +445,29 @@
   .prof-start .rlabel .rsub { line-height: 1.35; }
   .prof-err { color: var(--red); font-size: 13px; margin: 6px 6px 0; min-height: 17px; }
   .prof-note { font-size: 13px; color: var(--muted); text-align: center; margin: 4px 8px 0; line-height: 1.4; }
-  /* the switch: a brief wash of the new profile's colour while the page cross-fades (a plain fade with Reduce Motion) */
-  .prof-wash { position: absolute; inset: 0; z-index: 20; pointer-events: none; background: var(--pf, transparent); opacity: 0; }
-  .prof-wash.on { opacity: .14; transition: opacity .1s ease-out; }
-  .prof-wash.off { transition: opacity .3s ease; }
-  .content.prof-out { opacity: 0; transform: scale(.985); transition: opacity .12s var(--ease-in), transform .12s var(--ease-in); }
-  .content.prof-in { transition: opacity .26s var(--ease-out), transform .26s var(--ease-out); }
+  /* The switch: a soft bloom of the new profile's colour opens from the button you tapped (which presses back), the
+     page fades down and rises back in, and the button's name rolls like a departure board. Only the page inside the
+     scrolling area moves, never the scrolling area itself (iPhone Safari mishandles that). Reduce Motion: a plain fade. */
+  .prof-wash { position: absolute; z-index: 20; pointer-events: none; width: 900px; height: 900px; left: calc(var(--bx, 50%) - 450px); top: calc(var(--by, 0px) - 450px);
+    border-radius: 50%; background: radial-gradient(closest-side, var(--pf, transparent) 0%, transparent 72%); opacity: 0; transform: scale(.05); }
+  .prof-wash.go { animation: profBloom .62s cubic-bezier(.23, 1, .32, 1) forwards; }
+  @keyframes profBloom { 0% { opacity: .3; transform: scale(.05); } 55% { opacity: .16; } 100% { opacity: 0; transform: scale(1); } }
+  .prof-btn.pop { animation: profPop .42s cubic-bezier(.34, 1.56, .64, 1); }
+  @keyframes profPop { from { transform: scale(.94); } }
+  .tab-page.prof-out { opacity: 0; transform: translateY(-6px); transition: opacity .14s cubic-bezier(.32, 0, .67, 0), transform .14s cubic-bezier(.32, 0, .67, 0); }
+  .tab-page.prof-pre { opacity: 0; transform: translateY(10px); transition: none; }
+  .tab-page.prof-in { transition: opacity .3s cubic-bezier(.23, 1, .32, 1), transform .34s cubic-bezier(.23, 1, .32, 1); }
+  .prof-name { position: relative; }
+  .prof-name .pn-old { position: absolute; top: 0; inset-inline-start: 0; animation: pnOut .22s cubic-bezier(.32, 0, .67, 0) forwards; }
+  .prof-name .pn-new { display: inline-block; animation: pnIn .32s cubic-bezier(.34, 1.3, .64, 1) both; }
+  @keyframes pnOut { to { transform: translateY(-110%); opacity: 0; } }
+  @keyframes pnIn { from { transform: translateY(110%); opacity: 0; } }
   @media (prefers-reduced-motion: reduce) {
     .prof-wash { display: none; }
-    .content.prof-out { transform: none; transition: opacity .12s linear; }
-    .content.prof-in { transition: opacity .2s linear; }
+    .tab-page.prof-out, .tab-page.prof-pre { transform: none; }
+    .tab-page.prof-out { transition: opacity .12s linear; }
+    .tab-page.prof-in { transition: opacity .2s linear; }
+    .prof-btn.pop, .prof-name .pn-old, .prof-name .pn-new { animation: none; }
     .prof-btn, .prof-swatch, .cg-bar i, .prof-chip { transition: none; }
     .prof-dot { animation: none; }
   }
@@ -626,32 +654,58 @@
   .ob-link { display: block; width: 100%; border: none; background: none; font: inherit; font-size: 15px; font-weight: 600; color: var(--accent); padding: 14px; cursor: pointer; }
   @media (prefers-reduced-motion: reduce) { .ob-body.fwd, .ob-body.back { animation: fadeIn .2s ease backwards; } }
 
-  /* auth */
-  .auth-screen { position: absolute; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; justify-content: center; padding: 24px; }
+  /* auth: the launch screen's logo stays as the header (it glides here from the launch screen, see hideSplash) */
+  .auth-screen { position: absolute; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; align-items: center; padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 24px); overflow-y: auto; overscroll-behavior: contain; }
   .auth-screen.hidden { display: none; }
-  .auth-title { font-size: 28px; font-weight: 800; margin-bottom: 20px; text-align: center; }
-  .auth-error { color: var(--red); font-size: 13px; margin: 10px 4px 4px; min-height: 16px; text-align: center; }
-  .auth-error.info { color: var(--muted); }
-  .auth-lang { width: fit-content; margin: 0 auto 22px; }
-  .auth-screen.loading .auth-card { visibility: hidden; }
-  .auth-link { display: block; margin: 14px auto 0; background: none; border: none; color: var(--accent); font-size: 14px; cursor: pointer; }
-  .auth-link.hidden { display: none; }
-  #authSubmitBtn:disabled { opacity: 0.5; cursor: default; }
-  /* while the details are checked: a spinner in place of the label, at full colour */
-  #authSubmitBtn.busy { position: relative; color: transparent; opacity: 1; }
+  .auth-screen.loading .auth-card, .auth-screen.loading .auth-lang { visibility: hidden; }
+  .auth-card { width: 100%; max-width: 440px; display: flex; flex-direction: column; }
+  .auth-lang { position: absolute; top: calc(env(safe-area-inset-top) + 12px); inset-inline-end: 16px; z-index: 1; border-radius: 9px; }
+  .auth-lang .seg-btn { padding: 5px 10px; border-radius: 7px; color: var(--muted); }
+  .auth-lang .seg-btn.active { background: var(--seg-thumb); color: var(--text); box-shadow: var(--seg-thumb-shadow); }
+  .auth-hero { display: flex; flex-direction: column; align-items: center; text-align: center; margin: max(56px, 8vh) 0 30px; }
+  .auth-mark svg { display: block; width: auto; height: 118px; filter: var(--mark-shadow); }
+  .au-p { fill: var(--au-person); }
+  .au-h { fill: none; stroke: var(--au-hands); stroke-width: 42.9; stroke-linecap: round; }
+  .auth-name { font-size: 30px; font-weight: 800; letter-spacing: -0.025em; margin-top: 18px; color: var(--text); }
+  .auth-tagline { color: var(--muted); font-size: 15px; line-height: 1.4; margin: 6px 8px 0; }
+  .auth-seg { display: flex; background: var(--track-off); border-radius: 10px; padding: 2px; margin-bottom: 14px; }
+  .auth-seg button { flex: 1; border: none; background: none; font: inherit; font-size: 14.5px; font-weight: 600; color: var(--muted); padding: 8px 4px; border-radius: 8px; cursor: pointer; transition: background-color .2s ease, color .2s ease, box-shadow .2s ease; }
+  .auth-seg button[aria-selected="true"] { background: var(--seg-thumb); color: var(--text); box-shadow: var(--seg-thumb-shadow); }
+  .auth-group { margin-bottom: 0; }
+  .auth-row { display: flex; align-items: center; gap: 12px; min-height: 50px; padding: 0 14px; border-bottom: 1px solid var(--sep); cursor: text; }
+  .auth-row:last-child { border-bottom: none; }
+  .auth-row > span { flex: none; font-size: 15.5px; color: var(--text); transition: color .2s ease; }
+  .auth-row.bad > span { color: var(--red); }
+  .auth-row input { flex: 1; min-width: 0; border: none; background: transparent; font: inherit; font-size: 16px; color: var(--text); text-align: right; padding: 14px 0; }
+  [dir="rtl"] .auth-row input { text-align: left; }
+  .auth-row input:focus { outline: none; }
+  .auth-row input::placeholder { color: var(--muted); opacity: .75; }
+  .auth-msg { display: flex; gap: 8px; align-items: flex-start; margin: 10px 2px 0; font-size: 13.5px; line-height: 1.4; color: var(--muted); }
+  .auth-msg:empty { display: none; }
+  .auth-msg svg { flex: none; width: 17px; height: 17px; margin-top: 1px; }
+  .auth-msg.err { color: var(--red); }
+  .auth-msg.info svg { color: var(--accent); }
+  .auth-opts { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 2px 0; font-size: 13.5px; color: var(--muted); }
+  .auth-keep { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .auth-link { background: none; border: none; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--accent); padding: 8px 0; cursor: pointer; }
+  .auth-link.hidden { visibility: hidden; }
+  #authSubmitBtn { margin-top: 18px; min-height: 52px; font-size: 16.5px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .auth-spin { width: 18px; height: 18px; border-radius: 50%; border: 2.4px solid currentColor; border-inline-end-color: transparent; animation: pcSpin .8s linear infinite; }
+  .auth-foot { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.45; margin: 14px 18px 0; }
+  /* during the hand-off from the launch screen: the launch logo stands in for this one, the form rises in a short cascade */
+  .auth-screen.handoff .auth-mark, .auth-screen.handoff .auth-name, .auth-screen.handoff .auth-tagline { opacity: 0; }
+  .auth-screen.handoff .auth-step, .auth-screen.handoff .auth-lang { opacity: 0; transform: translateY(14px); }
+  .auth-screen.handoff.handoff-in .auth-step, .auth-screen.handoff.handoff-in .auth-lang { opacity: 1; transform: none; transition: opacity .42s var(--ease-out), transform .5s var(--ease-out); transition-delay: var(--d, .2s); }
+  .auth-screen.handoff.handoff-in .auth-tagline { opacity: 1; transition: opacity .4s ease .32s; }
+  #authSubmitBtn:disabled { opacity: 0.4; cursor: default; }
+  #authSubmitBtn.busy { opacity: 1; }
   #delBtn.busy { position: relative; color: transparent; opacity: 1; }
   #delBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--red); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
-  #authSubmitBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--on-accent); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
   .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.dragging { transition: none; }
   .toast.show.has-action { touch-action: none; cursor: pointer; }
   .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
-  .auth-field { display: block; border-bottom: 1px solid var(--sep); cursor: text; }
-  .auth-field:last-child { border-bottom: none; }
-  .auth-field input { display: block; width: 100%; border: none; background: transparent; font-size: 16px; color: var(--text); padding: 14px; }
-  .auth-field input:focus { outline: none; }
-  .auth-field input::placeholder { color: var(--muted); }
 
   /* ---- Luach: the month on the wall calendar; weekend-rate hours sit inside the shaded band ---- */
   .heb-sub { font-family: "Frank Ruhl Libre", serif; font-weight: 700; font-size: 15px; color: var(--heb); margin: -10px 0 12px; min-height: 20px; }
@@ -776,26 +830,32 @@
     </div>
   </div>
   <div class="auth-screen loading" id="authScreen">
+    <div class="seg-toggle auth-lang" id="authLangToggle">
+      <button type="button" class="seg-btn" data-lang="en" lang="en">EN</button>
+      <button type="button" class="seg-btn" data-lang="he" lang="he" aria-label="עברית">עב</button>
+    </div>
     <form class="auth-card" id="authForm" novalidate>
-      <div class="seg-toggle auth-lang" id="authLangToggle">
-        <button type="button" class="seg-btn" data-lang="en">English</button>
-        <button type="button" class="seg-btn" data-lang="he">עברית</button>
+      <div class="auth-hero">
+        <div class="auth-mark" id="authMark" aria-hidden="true"></div>
+        <div class="auth-name">Shifts Tracker</div>
+        <p class="auth-tagline" id="authTagline"></p>
       </div>
-      <div class="auth-title" id="authTitle">Sign In</div>
-      <div class="list-group">
-        <label class="auth-field"><input type="email" id="authEmail" placeholder="Email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254"></label>
-        <label class="auth-field"><input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" maxlength="128"></label>
+      <h1 class="sr-only" id="authTitle">Sign In</h1>
+      <div class="auth-seg auth-step" id="authModeSeg" role="tablist">
+        <button type="button" role="tab" data-mode="signin" id="authModeSignin" aria-selected="true">Sign in</button>
+        <button type="button" role="tab" data-mode="signup" id="authModeSignup" aria-selected="false">Create account</button>
       </div>
-      <div class="list-group" style="margin-top:10px;">
-        <div class="list-row">
-          <div class="rlabel" id="authRememberLabel">Remember me</div>
-          <label class="switch"><input type="checkbox" id="authRemember" checked><span class="track"></span><span class="thumb"></span></label>
-        </div>
+      <div class="list-group auth-group auth-step">
+        <label class="auth-row" id="authEmailRow"><span id="authEmailLabel">Email</span><input type="email" id="authEmail" dir="ltr" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254"></label>
+        <label class="auth-row" id="authPasswordRow"><span id="authPasswordLabel">Password</span><input type="password" id="authPassword" autocomplete="current-password" maxlength="128"></label>
       </div>
-      <div class="auth-error" id="authError"></div>
-      <button type="button" class="btn-accent btn-block" id="authSubmitBtn">Sign In</button>
-      <button type="button" class="btn-plain btn-block" id="authToggleBtn" style="margin-top:10px;">Need an account? Sign Up</button>
-      <button type="button" class="auth-link" id="authForgotBtn">Forgot password?</button>
+      <div class="auth-msg" id="authError" role="status" aria-live="polite"></div>
+      <div class="auth-opts auth-step">
+        <label class="auth-keep"><span id="authRememberLabel">Stay signed in</span><span class="switch"><input type="checkbox" id="authRemember" checked><span class="track"></span><span class="thumb"></span></span></label>
+        <button type="button" class="auth-link" id="authForgotBtn">Forgot password?</button>
+      </div>
+      <button type="button" class="btn-accent btn-block auth-step" id="authSubmitBtn">Sign in</button>
+      <p class="auth-foot auth-step" id="authFoot"></p>
     </form>
   </div>
 

@@ -1147,11 +1147,17 @@
     cal.classList.toggle('with-heb', showHebrewDates());
     const windowText = windowDurationMinutes(settings) === 0 ? t('calNoWeekend')
       : `${t('calLegendWeekend')} · ${dowShort(settings.weekendStartDow)} ${settings.weekendStartTime} – ${dowShort(settings.weekendEndDow)} ${settings.weekendEndTime}`;
+    // The legend explains only what this month's calendar actually shows.
     const othersInMonth = new Map();
     otherProfileDays(monthFilter).forEach(list => list.forEach(p => othersInMonth.set(p.id, p)));
-    legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span><span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`
-      + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`
-      + Array.from(othersInMonth.values()).map(p => `<span><i class="luach-oth-key pf-${profileColor(p)}"></i>${escapeHtml(t('calLegendOther').replace('{n}', profileName(p)))}</span>`).join('');
+    const has = sel => !!cal.querySelector(sel);
+    const parts = [];
+    if (has('.luach-hrs')) parts.push(`<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span>`);
+    if (has('.luach-day:not(.out) .luach-shade') || has('.luach-hrs.weekend')) parts.push(`<span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`);
+    if (has('.luach-day.hol:not(.out)') || has('.luach-hrs.holiday')) parts.push(`<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`);
+    othersInMonth.forEach(p => parts.push(`<span><i class="luach-oth-key pf-${profileColor(p)}"></i>${escapeHtml(t('calLegendOther').replace('{n}', profileName(p)))}</span>`));
+    legend.innerHTML = parts.join('');
+    legend.classList.toggle('hidden', !parts.length);
   }
   // The pill slide plays once; later re-renders of the same month must not replay it.
   $('summaryCalendar').addEventListener('animationend', e => { if (e.animationName === 'calIn') $('summaryCalendar').classList.remove('cal-in'); });
@@ -3816,21 +3822,41 @@
   let lockTicker = null;
   let lastResetAt = 0;
 
-  function authMsg(text, isInfo) {
+  // The message under the fields: kind 'err' (red, with an alert icon) or 'info' (calm, with a mail icon; the old
+  // `true`); `field` ('email' / 'password') turns that field's label red. With nothing to say while creating an
+  // account, the password rule shows there, before anyone gets it wrong.
+  const ICON_AUTH_ALERT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.1"/></svg>';
+  const ICON_AUTH_MAIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M4 7.5l8 5.5 8-5.5"/></svg>';
+  function authMsg(text, kind, field) {
     const el = $('authError');
-    el.textContent = text;
-    el.classList.toggle('info', !!isInfo);
+    kind = kind === true ? 'info' : kind || 'err';
+    $('authEmailRow').classList.toggle('bad', !!text && field === 'email');
+    $('authPasswordRow').classList.toggle('bad', !!text && field === 'password');
+    if (!text && authMode === 'signup') { el.className = 'auth-msg'; el.textContent = t('authErrPasswordRules'); return; }
+    el.className = 'auth-msg' + (text ? ' ' + kind : '');
+    el.innerHTML = text ? (kind === 'info' ? ICON_AUTH_MAIL : ICON_AUTH_ALERT) + `<span>${escapeHtml(text)}</span>` : '';
+  }
+  // The main button says what it will do, that it's working, or how long the lock after failed attempts lasts.
+  function renderAuthButton(lockSec) {
+    const signIn = authMode === 'signin', btn = $('authSubmitBtn');
+    if (authBusy) btn.innerHTML = `<span class="auth-spin" aria-hidden="true"></span><span>${escapeHtml(t(signIn ? 'authSigningIn' : 'authCreating'))}</span>`;
+    else btn.textContent = lockSec > 0 ? t('authTryIn').replace('{s}', lockSec) : t(signIn ? 'authModeSignIn' : 'authModeSignUp');
   }
 
   function updateAuthUI() {
     const signIn = authMode === 'signin';
     $('authTitle').textContent = signIn ? t('authSignIn') : t('authSignUp');
-    $('authSubmitBtn').textContent = signIn ? t('authSignIn') : t('authSignUp');
-    $('authToggleBtn').textContent = signIn ? t('authNeedAccount') : t('authHaveAccount');
+    $('authModeSeg').querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.mode === authMode)));
+    $('authModeSignin').textContent = t('authModeSignIn');
+    $('authModeSignup').textContent = t('authModeSignUp');
+    $('authTagline').textContent = t('authTagline');
+    $('authFoot').textContent = t('authFoot');
+    $('authEmailLabel').textContent = t('authEmail');
+    $('authPasswordLabel').textContent = t('authPassword');
     $('authForgotBtn').textContent = t('authForgot');
     $('authForgotBtn').classList.toggle('hidden', !signIn);
-    $('authEmail').placeholder = t('authEmail');
-    $('authPassword').placeholder = t('authPassword');
+    $('authEmail').placeholder = t('authEmailPh');
+    $('authPassword').placeholder = t(signIn ? 'authPasswordPh' : 'authNewPasswordPh');
     $('authPassword').autocomplete = signIn ? 'current-password' : 'new-password';
     $('authRememberLabel').textContent = t('authRemember');
     authMsg('');
@@ -3861,6 +3887,7 @@
       const sec = lockRemainingSec();
       $('authSubmitBtn').disabled = authBusy || sec > 0;
       $('authSubmitBtn').classList.toggle('busy', authBusy);
+      renderAuthButton(sec);
       if (sec > 0) {
         authMsg(t('authLocked').replace('{s}', sec));
         showingLock = true;
@@ -3913,18 +3940,21 @@
     updateAuthUI();
   }));
 
-  $('authToggleBtn').addEventListener('click', () => {
-    authMode = authMode === 'signin' ? 'signup' : 'signin';
+  $('authModeSeg').querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+    if (authMode === b.dataset.mode) return;
+    authMode = b.dataset.mode;
     updateAuthUI();
-  });
+  }));
+  // typing in a field clears its red label
+  [['authEmail', 'authEmailRow'], ['authPassword', 'authPasswordRow']].forEach(([i, r]) => $(i).addEventListener('input', () => $(r).classList.remove('bad')));
 
   $('authSubmitBtn').addEventListener('click', () => {
     if (authBusy || lockRemainingSec() > 0) return;
     const email = $('authEmail').value.trim();
     const password = $('authPassword').value;
-    if (!email || !password) { authMsg(t('authFillFields')); return; }
-    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail')); return; }
-    if (authMode === 'signup' && !isStrongPassword(password)) { authMsg(t('authErrPasswordRules')); return; }
+    if (!email || !password) { authMsg(t('authFillFields'), 'err', !email ? 'email' : 'password'); return; }
+    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail'), 'err', 'email'); return; }
+    if (authMode === 'signup' && !isStrongPassword(password)) { authMsg(t('authErrPasswordRules'), 'err', 'password'); return; }
     authMsg('');
     const remember = $('authRemember').checked;
     try {
@@ -3941,7 +3971,8 @@
       .then(() => { setLock({ fails: 0, until: 0 }); $('authPassword').value = ''; })
       .catch(err => {
         if (CREDENTIAL_ERRORS.includes(err && err.code)) registerFailure();
-        if (lockRemainingSec() === 0) authMsg(authErrorMessage(err));
+        const code = err && err.code;
+        if (lockRemainingSec() === 0) authMsg(authErrorMessage(err), 'err', CREDENTIAL_ERRORS.includes(code) || code === 'auth/weak-password' ? 'password' : code === 'auth/invalid-email' || code === 'auth/email-already-in-use' ? 'email' : null);
         signingUp = false;
       })
       .finally(() => setAuthBusy(false));
@@ -3950,7 +3981,7 @@
   // Same confirmation whether or not the email has an account, to avoid revealing registered emails.
   $('authForgotBtn').addEventListener('click', () => {
     const email = $('authEmail').value.trim();
-    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail')); return; }
+    if (!isPlausibleEmail(email)) { authMsg(t('authErrInvalidEmail'), 'err', 'email'); return; }
     if (Date.now() - lastResetAt < RESET_COOLDOWN_MS) { authMsg(t('authResetSent'), true); return; }
     lastResetAt = Date.now();
     auth.sendPasswordResetEmail(email)
@@ -4138,10 +4169,65 @@
     const quiet = document.documentElement.classList.contains('splash-quiet');
     const minWait = new Promise(r => setTimeout(r, quiet ? 0 : Math.max(0, SPLASH_MIN_MS - performance.now())));
     Promise.all([minWait, splashSettled(el)]).then(() => {
+      if (handOffToSignIn(el)) return;
       el.classList.add('done');
       setTimeout(() => { el.remove(); document.documentElement.classList.remove('splash-quiet'); }, 450);
       if (el.classList.contains('again')) replayEntrance(activeTab);
     });
+  }
+  // When the sign-in screen comes next, the launch logo doesn't fade out and come back: it glides up and shrinks onto
+  // the sign-in logo, the name grows into the title, the launch screen's ground fades away and the form rises under it.
+  // The hands finish their turn and stop at rest, so the swap to the still logo at the end can't be seen.
+  const HANDOFF_MS = 640;
+  function handOffToSignIn(el) {
+    const auth = $('authScreen');
+    if (reduceMotion.matches || el.classList.contains('again') || auth.classList.contains('hidden') || auth.classList.contains('loading')) return false;
+    const inner = el.querySelector('.splash-inner'), mark = el.querySelector('.splash-mark'), name = el.querySelector('.splash-name');
+    const toMark = auth.querySelector('.auth-mark svg'), toName = auth.querySelector('.auth-name');
+    if (!inner || !mark || !name || !toMark || !toName) return false;
+    auth.classList.add('handoff');
+    const a = mark.getBoundingClientRect(), b = toMark.getBoundingClientRect(), ir = inner.getBoundingClientRect();
+    const n = name.getBoundingClientRect(), tn = toName.getBoundingClientRect();
+    if (!a.height || !b.height || !n.height) { auth.classList.remove('handoff'); return false; }
+    const s = b.height / a.height, M = { x: a.left + a.width / 2, y: a.top + a.height / 2 };
+    const dx = b.left + b.width / 2 - M.x, dy = b.top + b.height / 2 - M.y;
+    // where the name's centre lands once the whole group has moved; the name then moves and grows on its own
+    const nc = { x: n.left + n.width / 2, y: n.top + n.height / 2 };
+    const landed = { x: M.x + s * (nc.x - M.x) + dx, y: M.y + s * (nc.y - M.y) + dy };
+    const ns = tn.height / n.height / s, ndx = (tn.left + tn.width / 2 - landed.x) / s, ndy = (tn.top + tn.height / 2 - landed.y) / s;
+    const curve = `${HANDOFF_MS}ms cubic-bezier(.65, 0, .2, 1)`;
+    inner.style.transformOrigin = `${M.x - ir.left}px ${M.y - ir.top}px`;
+    name.style.animation = 'none';
+    inner.style.transition = `transform ${curve}`;
+    name.style.transition = `transform ${curve}, font-weight ${curve}`;
+    el.style.transition = 'background-color .45s ease';
+    // the hands finish their turn and stop at rest
+    el.querySelectorAll('.splash-hand').forEach(h => {
+      const m = new DOMMatrix(getComputedStyle(h).transform);
+      const from = (Math.atan2(m.b, m.a) * 180 / Math.PI + 360) % 360;
+      h.style.animation = 'none';
+      if (h.animate && from > 0.5) h.animate([{ transform: `rotate(${from}deg)` }, { transform: 'rotate(360deg)' }], { duration: HANDOFF_MS - 80, easing: 'cubic-bezier(.16, 1, .3, 1)', fill: 'forwards' });
+    });
+    auth.querySelectorAll('.auth-step').forEach((x, i) => x.style.setProperty('--d', (0.2 + i * 0.05) + 's'));
+    auth.querySelector('.auth-lang').style.setProperty('--d', '.3s');
+    void el.offsetWidth;
+    requestAnimationFrame(() => {
+      inner.style.transform = `translate(${dx}px, ${dy}px) scale(${s})`;
+      name.style.transform = `translate(${ndx}px, ${ndy}px) scale(${ns})`;
+      name.style.fontWeight = '800';
+      el.style.backgroundColor = 'transparent';
+      auth.classList.add('handoff-in');
+    });
+    const still = [auth.querySelector('.auth-mark'), toName];
+    setTimeout(() => {
+      // the launch logo is now exactly on top of the sign-in logo: swap them
+      still.forEach(x => { x.style.opacity = '1'; });
+      el.remove();
+      document.documentElement.classList.remove('splash-quiet');
+    }, HANDOFF_MS + 20);
+    // once the form's cascade has finished, the hand-off leaves nothing behind
+    setTimeout(() => { auth.classList.remove('handoff', 'handoff-in'); still.forEach(x => { x.style.opacity = ''; }); }, 1250);
+    return true;
   }
   // After signing in from the form, the launch screen fades in over it and covers the wait for the
   // account's data; the first snapshot then opens the app the same way as a normal launch.
@@ -4255,26 +4341,52 @@
     rememberProfile(p.id);
     ratesListExpanded = false;
   }
-  // The switch: the page fades out, a wash of the new profile's colour comes up, the new profile fades in
-  // (about a third of a second). With Reduce Motion it's a plain fade (the wash is hidden by the CSS).
+  // The switch (about half a second): a soft bloom of the new profile's colour opens from the profile button's circle
+  // and the button presses back; the page fades down and out, then rises back in for the new profile while the
+  // button's name rolls from the old to the new. Only the visible tab's page moves, never the scrolling area itself.
+  // With Reduce Motion it's a plain fade (the CSS drops the bloom, the roll and the movement).
   let profSwitchTimer = null;
   function playProfileSwitch(p, swap, after) {
-    const content = $('content'), wash = $('profWash');
+    const bloom = $('profWash'), from = $('tab-' + activeTab);
+    const btn = from.querySelector('[data-prof-btn]'), oldName = btn ? btn.querySelector('.prof-name').textContent : '';
     clearTimeout(profSwitchTimer);
-    wash.className = 'prof-wash pf-' + profileColor(p);
-    void wash.offsetWidth;
-    wash.classList.add('on');
-    content.classList.remove('prof-in');
-    content.classList.add('prof-out');
+    document.querySelectorAll('.tab-page.prof-in, .tab-page.prof-out').forEach(x => x.classList.remove('prof-in', 'prof-out', 'prof-pre'));
+    const av = btn && btn.querySelector('.prof-av');
+    if (av) {
+      const r = av.getBoundingClientRect(), ar = document.querySelector('.app').getBoundingClientRect();
+      bloom.style.setProperty('--bx', (r.left + r.width / 2 - ar.left) + 'px');
+      bloom.style.setProperty('--by', (r.top + r.height / 2 - ar.top) + 'px');
+      bloom.className = 'prof-wash pf-' + profileColor(p);
+      void bloom.offsetWidth;
+      bloom.classList.add('go');
+      btn.classList.remove('pop');
+      void btn.offsetWidth;
+      btn.classList.add('pop');
+    }
+    from.classList.add('prof-out');
     profSwitchTimer = setTimeout(() => {
       swap();
-      content.scrollTop = 0;
+      $('content').scrollTop = 0;
       if (after) after();
-      content.classList.add('prof-in');
-      content.classList.remove('prof-out');
-      wash.classList.replace('on', 'off');
-      profSwitchTimer = setTimeout(() => { content.classList.remove('prof-in'); wash.className = 'prof-wash'; }, 320);
-    }, 130);
+      // `after` may have opened another tab (Switch › opens Shifts on a day)
+      const to = $('tab-' + activeTab);
+      from.classList.remove('prof-out');
+      to.classList.add('prof-pre');
+      void to.offsetWidth;
+      to.classList.remove('prof-pre');
+      to.classList.add('prof-in');
+      rollProfileName(oldName);
+      profSwitchTimer = setTimeout(() => { to.classList.remove('prof-in'); bloom.className = 'prof-wash'; }, 640);
+    }, 150);
+  }
+  // The visible profile button's old name rolls up and away while the new one rolls in from below.
+  function rollProfileName(oldName) {
+    const nm = document.querySelector('#tab-' + activeTab + ' [data-prof-btn] .prof-name');
+    if (!nm || !oldName || reduceMotion.matches) return;
+    const name = nm.textContent;
+    if (name === oldName) return;
+    nm.innerHTML = `<span class="pn-old">${escapeHtml(oldName)}</span><span class="pn-new">${escapeHtml(name)}</span>`;
+    setTimeout(() => { if (nm.isConnected && nm.querySelector('.pn-new')) nm.textContent = name; }, 400);
   }
   function switchProfile(id, after) {
     const p = account.profiles.find(x => x.id === id);
@@ -4495,9 +4607,15 @@
       cal.innerHTML = `<div class="luach-track"><div class="luach-pane">${apGridHtml(month)}</div></div>`;
     }
     if (on) {
-      const worked = list.filter(p => profileDataById(p.id).shifts.some(s => monthKey(s.date) === month));
-      legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span>` + worked.map(p => `<span><i class="ap-key pf-${profileColor(p)}"></i>${escapeHtml(profileName(p))}</span>`).join('')
-        + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`;
+      // only what this month's calendar shows (worked out from the data, so it's right mid-swipe too)
+      const days = Array.from(apDays(month).values());
+      const worked = list.filter(p => days.some(e => e.profiles.includes(p)));
+      const parts = [];
+      if (days.length) parts.push(`<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span>`);
+      worked.forEach(p => parts.push(`<span><i class="ap-key pf-${profileColor(p)}"></i>${escapeHtml(profileName(p))}</span>`));
+      if (days.some(e => e.holiday)) parts.push(`<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`);
+      legend.innerHTML = parts.join('');
+      legend.classList.toggle('hidden', !parts.length);
     }
     const pcStatus = r => {
       if (month === 'all' || !currentUser || !paychecksLoaded || !r.hours) return '';
@@ -4871,17 +4989,24 @@
   // (the launch screen and its gradients are gone once it closes).
   let obMarkHtml = null;
   function obMark() {
-    if (obMarkHtml !== null || !splashTemplate) return obMarkHtml || '';
+    if (obMarkHtml === null) obMarkHtml = stillMark('ob', 'ob-mark-svg');
+    return obMarkHtml;
+  }
+  // A still copy of the launch screen's logo with its own ids and classes (prefix-p for the person, prefix-h for the
+  // hands, coloured by --prefix-person / --prefix-hands), for the setup pages ('ob') and the sign-in screen ('au').
+  function stillMark(prefix, cls) {
+    if (!splashTemplate) return '';
     const svg = splashTemplate.querySelector('.splash-mark').cloneNode(true);
     const mask = svg.querySelector('mask');
     if (mask) mask.remove();
     svg.querySelectorAll('[mask]').forEach(e => e.removeAttribute('mask'));
-    svg.querySelectorAll('[id]').forEach(e => { e.id = e.id.replace('splash', 'ob'); });
-    svg.querySelectorAll('.splash-person').forEach(e => e.setAttribute('class', 'ob-p'));
-    svg.querySelectorAll('.splash-hand').forEach(e => e.setAttribute('class', 'ob-h'));
-    svg.setAttribute('class', 'ob-mark-svg');
+    svg.querySelectorAll('[id]').forEach(e => { e.id = e.id.replace('splash', prefix); });
+    svg.querySelectorAll('[fill^="url(#splash"], [stroke^="url(#splash"]').forEach(e => ['fill', 'stroke'].forEach(a => { const v = e.getAttribute(a); if (v) e.setAttribute(a, v.replace('#splash', '#' + prefix)); }));
+    svg.querySelectorAll('.splash-person').forEach(e => e.setAttribute('class', prefix + '-p'));
+    svg.querySelectorAll('.splash-hand').forEach(e => e.setAttribute('class', prefix + '-h'));
+    svg.setAttribute('class', cls);
     svg.setAttribute('aria-hidden', 'true');
-    return (obMarkHtml = svg.outerHTML);
+    return svg.outerHTML;
   }
   function obInput(id, value, attrs) { return `<input id="${id}" value="${escapeHtml(String(value))}" ${attrs}>`; }
   function obDaySelect(id, dow) {
@@ -5035,6 +5160,7 @@
   }
 
   // ---- boot ----
+  $('authMark').innerHTML = stillMark('au', 'au-mark-svg');
   loadSettingsForm();
   loadGoalForm();
   initSettingsPickers();
