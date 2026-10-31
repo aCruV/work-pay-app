@@ -898,7 +898,6 @@
     clearTimeout(fitTotalTimer);
     fitTotalTimer = setTimeout(() => fitTotal([money(total)]), 600);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
-    renderAllProfilesLine();
     renderCalendar();
     renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
     renderPaychecks();
@@ -1410,6 +1409,7 @@
 
   function renderDataViews() {
     renderProfileUI();
+    renderAllPage();
     renderSummary();
     renderShifts();
     renderGoals();
@@ -2856,9 +2856,8 @@
     if (ignoreNextPop) { ignoreNextPop = false; return; }
     if (pcZoomHistory) { pcZoomHistory = false; closePaycheckZoom(false, true); return; }
     if (addProfileHistory) { addProfileHistory = false; addProfileBack(); return; }
-    if (!sheetHistory) return;
-    sheetHistory = false;
-    if (sheetIsOpen()) closeSheetOverlay();
+    if (sheetHistory) { sheetHistory = false; if (sheetIsOpen()) closeSheetOverlay(); return; }
+    if (allPageHistory) { allPageHistory = false; closeAllProfilesPage(true); }
   });
   function closeSheetOverlay() {
     const overlay = $('sheetOverlay');
@@ -4232,7 +4231,7 @@
   }
   function switchProfile(id, after) {
     const p = account.profiles.find(x => x.id === id);
-    if (sheetMode === 'profiles' || sheetMode === 'allProfiles') closeSheetOverlay();
+    if (sheetMode === 'profiles') closeSheetOverlay();
     if (!p) return;
     if (id === activeProfileId) { if (after) after(); return; }
     playProfileSwitch(p, () => { activateProfile(id); refreshAll(); }, after);
@@ -4289,7 +4288,7 @@
     el.innerHTML = `${ICON_WARN}<span>${escapeHtml(t('clashOther').replace('{n}', profileName(hit.p)).replace('{d}', formatDateDisplay(hit.s.date)).replace('{t}', `${hit.s.startTime}–${hit.s.endTime}`))}<small>${escapeHtml(t('clashOtherSub'))}</small></span>`;
   }
 
-  // ---- all profiles together: the line under the total and its summary ----
+  // ---- all profiles together: the All profiles page (opened only from the switcher) ----
   // A profile's hours and pay for a month, or for all time ('all').
   function profilePeriodStats(p, period) {
     if (period !== 'all') return profileMonthStats(p, period);
@@ -4299,17 +4298,6 @@
       return { hours, pay: pay + allMonths().reduce((sum, m) => sum + additionsTotal(m), 0) };
     });
   }
-  function allProfilesLabel(period) {
-    return period === 'all' ? t('allLineAll') : period === currentMonthStr() ? t('profileAllMonth') : t('allLineMonth').replace('{m}', monthLongLabel(period));
-  }
-  function renderAllProfilesLine() {
-    const el = $('allProfilesLine'), list = account.profiles;
-    el.classList.toggle('hidden', list.length < 2);
-    if (list.length < 2) { el.innerHTML = ''; return; }
-    const total = list.reduce((sum, p) => sum + profilePeriodStats(p, monthFilter).pay, 0);
-    el.innerHTML = `<span class="prof-stack">${list.map(p => profAvatar(p)).join('')}</span><span class="all-label">${escapeHtml(allProfilesLabel(monthFilter))}</span><span class="all-amt money-private">${escapeHtml(money(total))}</span><span class="all-chev">${ICON_CHEV_R}</span>`;
-  }
-  $('allProfilesLine').addEventListener('click', () => openAllProfilesSheet(monthFilter));
   // The numbers of the goal for all profiles in a month (null when it's off).
   function combinedGoalNumbers(month) {
     const c = account.combined;
@@ -4325,24 +4313,127 @@
       rem: target <= 0 ? t('goalSetPrompt') : reached ? t('goalReached') : `${fmtVal(target - achieved)} ${t('goalRemaining')}`
     };
   }
-  // Each profile's total, hours and paycheck, the grand total, and the goal for all profiles.
-  function openAllProfilesSheet(period) {
+
+  // The page has its own month (it never changes the one picked on Summary), owns one history entry like a sheet
+  // (the phone's Back closes a day's sheet first, then the page) and redraws itself when data changes meanwhile.
+  let apMonth = null, allPageHistory = false, apCalHold = false;
+  const allPageOpen = () => { const el = $('allPage'); return !el.classList.contains('hidden') && !el.classList.contains('closing'); };
+  // Months with a shift in any profile, plus this month; newest first (like Summary's pills).
+  function apMonths() {
+    const set = new Set([currentMonthStr()]);
+    account.profiles.forEach(p => profileDataById(p.id).shifts.forEach(s => set.add(monthKey(s.date))));
+    return Array.from(set).sort().reverse();
+  }
+  function openAllProfilesPage() {
     if (account.profiles.length < 2) return;
-    sheetMode = 'allProfiles'; editingId = null;
-    $('sheetTitle').textContent = t('allTitle');
-    $('sheetSave').style.visibility = 'hidden';
-    const rows = account.profiles.map(p => Object.assign({ p }, profilePeriodStats(p, period)));
+    apMonth = currentMonthStr();
+    // the switcher's history entry is reused (as when adding a profile)
+    if (sheetHistory) sheetHistory = false;
+    else { try { history.pushState({ allProfiles: true }, ''); } catch (e) {} }
+    allPageHistory = true;
+    if (sheetIsOpen()) closeSheetOverlay();
+    const el = $('allPage');
+    el.classList.remove('hidden', 'closing');
+    $('apScroll').scrollTop = 0;
+    renderAllPage();
+  }
+  function hideAllPage() {
+    const el = $('allPage');
+    if (el.classList.contains('hidden')) return;
+    if (reduceMotion.matches && !el.classList.contains('closing')) { el.classList.add('hidden'); return; }
+    el.classList.add('closing');
+    setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); }, 230);
+  }
+  // fromBack: the phone's Back already removed the page's history entry.
+  function closeAllProfilesPage(fromBack) {
+    if (!fromBack && allPageHistory) { allPageHistory = false; ignoreNextPop = true; history.back(); }
+    hideAllPage();
+  }
+  // Leaving the page for one profile (a job row, or Edit on a day's shift): the day's sheet, the page and their
+  // history entries go together, then that profile opens (on that day when one is given).
+  function leaveAllPageFor(id, date) {
+    let n = 0;
+    if (sheetHistory) { sheetHistory = false; n++; }
+    if (allPageHistory) { allPageHistory = false; n++; }
+    if (sheetIsOpen()) closeSheetOverlay();
+    hideAllPage();
+    if (n) { ignoreNextPop = true; history.go(-n); }
+    if (date) switchToProfileDay(id, date); else switchProfile(id);
+  }
+  $('apBack').addEventListener('click', () => closeAllProfilesPage(false));
+
+  // date -> every profile's shifts that day, worked out with that profile's own rules
+  function apDays(month) {
+    const out = new Map();
+    account.profiles.forEach(p => inProfile(p, () => state.shifts.forEach(s => {
+      if (monthKey(s.date) !== month) return;
+      const c = calcShift(s);
+      const e = out.get(s.date) || { hours: 0, pay: 0, profiles: [], holiday: false, items: [] };
+      e.hours += c.exactHours; e.pay += c.pay;
+      if (!e.profiles.includes(p)) e.profiles.push(p);
+      if (s.isHoliday && !c.custom) e.holiday = true;
+      e.items.push({ p, s, c });
+      out.set(s.date, e);
+    })));
+    return out;
+  }
+  // The month's calendar in Summary's style: each day's hours across all profiles and a dot per profile worked.
+  // No weekend shading (every profile has its own weekend window); holiday shifts stay red.
+  function apGridHtml(month) {
+    const [y, m] = month.split('-').map(Number);
+    const first = new Date(y, m - 1, 1), daysIn = new Date(y, m, 0).getDate();
+    const days = apDays(month), today = todayStr();
+    let html = '<div class="luach-dow" aria-hidden="true">' + [0, 1, 2, 3, 4, 5, 6].map(d => `<span>${escapeHtml(dowShort(d))}</span>`).join('') + '</div><div class="luach-grid">';
+    const lead = first.getDay(), cells = Math.ceil((lead + daysIn) / 7) * 7;
+    for (let i = 0; i < cells; i++) {
+      const d = new Date(y, m - 1, 1 - lead + i);
+      const ds = dateStr(d), inMonth = d.getMonth() === m - 1, hd = hebrewDate(d);
+      const e = inMonth ? days.get(ds) : null;
+      let label = formatDateDisplay(ds), extra = '';
+      if (e) {
+        label = t('allDayLabel').replace('{d}', label).replace('{h}', hrsText(fmt(e.hours))).replace('{p}', e.profiles.map(profileName).join(', '));
+        extra = `<span class="luach-hrs${e.holiday ? ' holiday' : ''}">${shortHours(e.hours)}</span><span class="ap-dots" aria-hidden="true">${e.profiles.map(p => `<i class="pf-${profileColor(p)}"></i>`).join('')}</span>`;
+      }
+      html += `<button type="button" class="luach-day${inMonth ? '' : ' out'}${ds === today ? ' today' : ''}${e && e.holiday ? ' hol' : ''}" data-date="${ds}"${inMonth && e ? '' : ' disabled tabindex="-1"'} aria-label="${escapeHtml(label)}">`
+        + `<span class="luach-d">${d.getDate()}</span>${extra}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
+    }
+    return html + '</div>';
+  }
+  function renderAllPage() {
+    if (!allPageOpen()) return;
+    const list = account.profiles, month = apMonth, months = apMonths();
+    if (month !== 'all' && !months.includes(month)) months.push(month);
+    $('apBack').innerHTML = `${ICON_CHEV_L}<span>${escapeHtml(t('allBack'))}</span>`;
+    $('apStack').innerHTML = list.map(p => profAvatar(p)).join('');
+    const pills = $('apPills');
+    pills.innerHTML = [['all', t('allTime')]].concat(months.sort().reverse().map(m => [m, monthLabel(m)])).map(([k, label]) => `<button type="button" class="pill${k === month ? ' active' : ''}" data-month="${k}">${escapeHtml(label)}</button>`).join('');
+    pills.querySelectorAll('.pill').forEach(b => b.addEventListener('click', () => { apMonth = b.dataset.month; renderAllPage(); }));
+    const act = pills.querySelector('.pill.active');
+    if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const rows = list.map(p => Object.assign({ p }, profilePeriodStats(p, month)));
     const hours = rows.reduce((a, r) => a + r.hours, 0), pay = rows.reduce((a, r) => a + r.pay, 0);
+    $('apTotal').textContent = money(pay);
+    $('apSub').textContent = `${hrsText(fmt(hours))} · ${month === 'all' ? t('allTime') : monthLongLabel(month)}`;
+    $('apSplit').innerHTML = pay > 0 ? rows.filter(r => r.pay > 0).map(r => `<i class="pf-${profileColor(r.p)}" style="flex:${r.pay.toFixed(2)} 1 0"></i>`).join('') : '';
+    const cal = $('apCal'), legend = $('apLegend'), on = month !== 'all';
+    cal.classList.toggle('hidden', !on);
+    legend.classList.toggle('hidden', !on);
+    if (on && !apCalHold) {
+      cal.classList.toggle('with-heb', showHebrewDates());
+      cal.innerHTML = `<div class="luach-track"><div class="luach-pane">${apGridHtml(month)}</div></div>`;
+    }
+    if (on) {
+      const worked = list.filter(p => profileDataById(p.id).shifts.some(s => monthKey(s.date) === month));
+      legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span>` + worked.map(p => `<span><i class="ap-key pf-${profileColor(p)}"></i>${escapeHtml(profileName(p))}</span>`).join('')
+        + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`;
+    }
     const pcStatus = r => {
-      if (period === 'all' || !currentUser || !paychecksLoaded || !r.hours) return '';
-      if (paychecksFor(period, r.p.id).length) return `<span class="pc-status ok">${escapeHtml(t('pcStatusOk'))}</span>`;
-      return period < currentMonthStr() ? `<span class="pc-status">${escapeHtml(t('pcStatusMissing'))}</span>` : '';
+      if (month === 'all' || !currentUser || !paychecksLoaded || !r.hours) return '';
+      if (paychecksFor(month, r.p.id).length) return `<span class="pc-status ok">${escapeHtml(t('pcStatusOk'))}</span>`;
+      return month < currentMonthStr() ? `<span class="pc-status">${escapeHtml(t('pcStatusMissing'))}</span>` : '';
     };
-    const split = pay > 0 ? `<div class="all-split" aria-hidden="true">${rows.filter(r => r.pay > 0).map(r => `<i class="pf-${profileColor(r.p)}" style="flex:${r.pay.toFixed(2)} 1 0"></i>`).join('')}</div>` : '';
-    const goal = period !== 'all' ? combinedGoalNumbers(period) : null;
-    $('sheetBody').innerHTML = `
-      <div class="all-head"><div class="all-total money-private">${escapeHtml(money(pay))}</div>
-        <div class="all-sub">${escapeHtml(hrsText(fmt(hours)))} · ${escapeHtml(period === 'all' ? t('allTime') : monthLongLabel(period))}</div>${split}</div>
+    const goal = on ? combinedGoalNumbers(month) : null;
+    $('apJobs').innerHTML = `<div class="section-header">${escapeHtml(t('allEach'))}</div>
       <div class="list-group">${rows.map(r => `<button type="button" class="list-row row-btn all-row" data-prof="${escapeHtml(r.p.id)}">${profAvatar(r.p)}
           <span class="rlabel">${escapeHtml(profileName(r.p))}<span class="rsub">${escapeHtml(hrsText(fmt(r.hours)))} · ${escapeHtml(money(profileDataById(r.p.id).settings.rate))} ${escapeHtml(t('rsPerHour'))}</span></span>
           <span class="all-row-end"><span class="stat-val money-private">${escapeHtml(money(r.pay))}</span>${pcStatus(r)}</span></button>`).join('')}
@@ -4350,9 +4441,92 @@
       ${goal ? `<div class="section-header" style="margin-top:18px;">${escapeHtml(t('combinedGoalToggle'))}</div>
         <div class="list-group"><div class="cg-progress"><div class="cg-line"><span>${escapeHtml(goal.ach)}</span><b>${escapeHtml(goal.pctText)}</b></div>
           <div class="cg-bar"><i class="${goal.reached ? 'done' : ''}" style="transform:scaleX(${goal.pct})"></i></div><div class="cg-rem">${escapeHtml(goal.rem)}</div></div></div>` : ''}`;
-    $('sheetBody').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => switchProfile(b.dataset.prof)));
+    $('apJobs').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => leaveAllPageFor(b.dataset.prof)));
+  }
+
+  // Tapping a day with shifts: every profile's shifts that day, each with Edit (opens that profile on that day).
+  $('apCal').addEventListener('click', e => {
+    const cell = e.target.closest('.luach-day');
+    if (!cell || cell.disabled) return;
+    openAllDaySheet(cell.dataset.date);
+  });
+  function openAllDaySheet(date) {
+    const e = apDays(monthKey(date)).get(date);
+    if (!e) return;
+    sheetMode = 'allDay'; editingId = null;
+    $('sheetTitle').textContent = formatDateDisplay(date);
+    $('sheetSave').style.visibility = 'hidden';
+    const items = e.items.slice().sort((a, b) => a.s.startTime.localeCompare(b.s.startTime));
+    $('sheetBody').innerHTML = `<div class="list-group">${items.map(({ p, s, c }) => `<div class="list-row ap-shift">${profAvatar(p)}
+        <span class="rlabel">${escapeHtml(profileName(p))}<span class="rsub">${s.startTime}–${s.endTime} · ${escapeHtml(hrsText(fmt(c.totalHours)))}</span></span>
+        <span class="stat-val money-private">${escapeHtml(money(c.pay))}</span>
+        <button type="button" class="ap-edit" data-prof="${escapeHtml(p.id)}">${escapeHtml(t('allEdit'))}${ICON_CHEV_R}</button></div>`).join('')}
+      <div class="list-row bd-total"><span class="rlabel">${escapeHtml(t('allThatDay'))}</span><span class="stat-val money-private">${escapeHtml(hrsText(fmt(e.hours)))} · ${escapeHtml(money(e.pay))}</span></div></div>`;
+    $('sheetBody').querySelectorAll('.ap-edit').forEach(b => b.addEventListener('click', () => leaveAllPageFor(b.dataset.prof, date)));
     openSheetOverlay();
   }
+
+  // Swiping the page's calendar steps through its months, exactly like Summary's calendar (same feel and timing):
+  // the next month is drawn beside the current one and both follow the finger. Mirrored in Hebrew.
+  (() => {
+    const cal = $('apCal'), vel = swipeVelocity();
+    let x0 = 0, y0 = 0, dx = 0, curX = 0, mode = null, busy = false, swallowClick = false, raf = 0, track = null, side = null, sideKey = '';
+    const order = () => apMonths().reverse();
+    const targetFor = d => { const list = order(), i = list.indexOf(apMonth); return i < 0 ? null : list[i + ((d > 0) !== isRtl() ? 1 : -1)] || null; };
+    const place = (x, h) => { curX = x; track.style.transform = `translate3d(${x}px, 0, 0)`; if (h != null) track.style.height = h + 'px'; };
+    const dropSide = () => { if (side) side.remove(); side = null; sideKey = ''; };
+    const pullSide = (month, d) => {
+      const key = month ? month + (d > 0 ? '<' : '>') : '';
+      if (key === sideKey) return;
+      dropSide();
+      if (!month) return;
+      side = document.createElement('div');
+      side.className = 'luach-pane side';
+      side.setAttribute('aria-hidden', 'true'); side.inert = true;
+      side.innerHTML = apGridHtml(month);
+      side.style.transform = `translate3d(${d > 0 ? -100 : 100}%, 0, 0)`;
+      track.appendChild(side); sideKey = key;
+    };
+    const reset = () => { if (track) { track.style.transform = track.style.height = track.style.willChange = ''; } dropSide(); busy = false; };
+    const frame = () => { raf = 0; const target = targetFor(dx); pullSide(target, dx); place(target ? dx : dx * 0.3); };
+    cal.addEventListener('touchstart', e => {
+      if (busy || e.touches.length !== 1) { mode = 'off'; return; }
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null; vel.reset();
+      track = cal.querySelector('.luach-track');
+    }, { passive: true });
+    cal.addEventListener('touchmove', e => {
+      if (mode === 'off' || e.touches.length !== 1 || !track) return;
+      const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (!mode) {
+        if (Math.abs(mx) < SWIPE_START && Math.abs(my) < SWIPE_START) return;
+        mode = Math.abs(mx) > Math.abs(my) * SWIPE_AXIS ? 'swipe' : 'off';
+        if (mode !== 'swipe') return;
+        if (!reduceMotion.matches) track.style.willChange = 'transform';
+      }
+      e.preventDefault();
+      dx = mx; vel.push(e.touches[0].clientX);
+      if (!reduceMotion.matches && !raf) raf = requestAnimationFrame(frame);
+    }, { passive: false });
+    const springBack = v => { busy = true; glide(curX, 0, v || 0, CAL_SLIDE.back, x => place(x), reset, CAL_SLIDE.min, CAL_SLIDE.start); };
+    cal.addEventListener('touchend', () => {
+      if (mode !== 'swipe') { mode = null; return; }
+      mode = null;
+      swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      const target = targetFor(dx), v = vel.get(), w = track.offsetWidth;
+      if (!target || !swipeCommits(dx, v, w)) { if (reduceMotion.matches) return; springBack(v); return; }
+      if (reduceMotion.matches) { apMonth = target; renderAllPage(); return; }
+      apCalHold = true; busy = true;
+      pullSide(target, dx);
+      const out = dx > 0 ? w : -w, h0 = track.offsetHeight, h1 = side.offsetHeight;
+      // the totals and pills switch right away; the calendar itself is redrawn once the slide ends
+      let early = false;
+      glide(curX, out, v, CAL_SLIDE.max, (x, e) => { place(x, h0 + (h1 - h0) * e); if (!early) { early = true; setTimeout(() => { apMonth = target; renderAllPage(); }, 0); } },
+        () => { apCalHold = false; reset(); renderAllPage(); }, CAL_SLIDE.min, CAL_SLIDE.start);
+    });
+    cal.addEventListener('touchcancel', () => { if (mode === 'swipe') springBack(0); mode = null; });
+    cal.addEventListener('click', e => { if (swallowClick) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+  })();
 
   // The switcher: every profile with this month's amount, a tick on the open one, and "Add profile".
   function openProfilesSheet() {
@@ -4371,7 +4545,7 @@
     $('sheetBody').innerHTML = `<div class="list-group">${rows}${add}</div>${all}<div class="section-footer">${escapeHtml(t('profileThisMonth').replace('{m}', monthLongLabel(month)))}</div>`;
     $('sheetBody').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => switchProfile(b.dataset.prof)));
     if ($('profSheetAdd')) $('profSheetAdd').addEventListener('click', openAddProfile);
-    if ($('profSheetAll')) $('profSheetAll').addEventListener('click', () => openAllProfilesSheet(month));
+    if ($('profSheetAll')) $('profSheetAll').addEventListener('click', openAllProfilesPage);
     openSheetOverlay();
   }
   document.querySelectorAll('[data-prof-btn]').forEach(b => b.addEventListener('click', openProfilesSheet));

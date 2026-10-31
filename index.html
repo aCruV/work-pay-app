@@ -342,16 +342,41 @@
   .clash-warn.hidden { display: none; }
   .clash-warn svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
   .clash-warn small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-  .all-line { width: 100%; display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 10px 12px; border: none; border-radius: 12px; background: var(--card); color: var(--text); font: inherit; font-size: 14px; text-align: start; cursor: pointer; box-shadow: var(--shadow); }
-  .all-line.hidden { display: none; }
-  .all-line:active { background-color: var(--press); }
-  .all-line .all-label { flex: 1; min-width: 0; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .all-line .all-amt { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .all-line .all-chev .ico-chev, .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
-  [dir="rtl"] .all-line .all-chev .ico-chev, [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
-  .all-head { padding: 2px 2px 14px; }
-  .all-total { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .all-sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
+  [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
+  /* the All profiles page (from the switcher): every job's shifts and totals on one calendar */
+  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; animation: apIn .3s var(--ease-out) backwards; }
+  [dir="rtl"] .allpage { animation-name: apInRtl; }
+  .allpage.hidden { display: none; }
+  .allpage.closing { animation: apOut .22s var(--ease-in) forwards; pointer-events: none; }
+  [dir="rtl"] .allpage.closing { animation-name: apOutRtl; }
+  @keyframes apIn { from { transform: translateX(100%); } }
+  @keyframes apInRtl { from { transform: translateX(-100%); } }
+  @keyframes apOut { to { transform: translateX(100%); } }
+  @keyframes apOutRtl { to { transform: translateX(-100%); } }
+  .ap-scroll { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(10px + env(safe-area-inset-top)) 16px calc(30px + env(safe-area-inset-bottom)); }
+  .ap-nav { display: flex; align-items: center; justify-content: space-between; min-height: 44px; }
+  .ap-back { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 16px; color: var(--accent); padding: 10px 0; cursor: pointer; }
+  .ap-back svg { width: 20px; height: 20px; }
+  [dir="rtl"] .ap-back svg { transform: scaleX(-1); }
+  .allpage .large-title { margin: 2px 0 12px; }
+  .ap-total { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .ap-sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  #apSplit { margin: 12px 0 14px; }
+  #apSplit:empty { display: none; }
+  .ap-cal.hidden, #apLegend.hidden { display: none; }
+  .ap-cal .luach-day { height: 68px; }
+  .ap-cal.with-heb .luach-day { height: 80px; }
+  .ap-cal .luach-day:disabled { cursor: default; }
+  .ap-dots { display: flex; gap: 3px; margin-top: 3px; }
+  .ap-dots i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--pf); }
+  #apLegend i.ap-key { width: 8px; height: 8px; border-radius: 50%; background: var(--pf); vertical-align: 0; margin-inline-end: 5px; }
+  .ap-shift { justify-content: flex-start; gap: 12px; }
+  .ap-shift .rlabel { flex: 1; min-width: 0; font-weight: 600; }
+  .ap-edit { flex: none; display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 14px; font-weight: 600; color: var(--accent); padding: 8px 0 8px 4px; cursor: pointer; }
+  .ap-edit .ico-chev { width: 13px; height: 13px; transform: rotate(-90deg); }
+  [dir="rtl"] .ap-edit .ico-chev { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .allpage, .allpage.closing, [dir="rtl"] .allpage, [dir="rtl"] .allpage.closing { animation-name: fadeIn; animation-duration: .2s; } .allpage.closing, [dir="rtl"] .allpage.closing { animation-name: fadeOut; } }
   .all-split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px; }
   .all-split i { display: block; background: var(--pf); min-width: 4px; }
   .all-row { justify-content: flex-start; gap: 12px; }
@@ -726,6 +751,19 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="prof-wash" id="profWash" aria-hidden="true"></div>
   <div class="onboard hidden" id="onboard" role="dialog" aria-modal="true" aria-labelledby="obTitle"></div>
+  <div class="allpage hidden" id="allPage" role="dialog" aria-modal="true" aria-labelledby="apTitle">
+    <div class="ap-scroll" id="apScroll">
+      <div class="ap-nav"><button type="button" class="ap-back" id="apBack"></button><span class="prof-stack" id="apStack" aria-hidden="true"></span></div>
+      <div class="large-title" id="apTitle" data-i18n="allTitle">All profiles</div>
+      <div class="pills" id="apPills"></div>
+      <div class="ap-total money-private" id="apTotal"></div>
+      <div class="ap-sub" id="apSub"></div>
+      <div class="all-split" id="apSplit" aria-hidden="true"></div>
+      <div class="luach ap-cal" id="apCal"></div>
+      <div class="luach-legend" id="apLegend"></div>
+      <div id="apJobs"></div>
+    </div>
+  </div>
   <div class="auth-screen loading" id="authScreen">
     <form class="auth-card" id="authForm" novalidate>
       <div class="seg-toggle auth-lang" id="authLangToggle">
@@ -761,7 +799,6 @@
         <div class="balance-value money-private" id="sumTotal">0</div>
         <div class="balance-sub money-private" id="sumSub"></div>
       </div>
-      <button type="button" class="all-line hidden" id="allProfilesLine"></button>
       <div class="pc-reminder hidden" id="paycheckReminder" role="status"></div>
       <div class="luach" id="summaryCalendar"></div>
       <div class="luach-legend" id="summaryCalendarLegend"></div>

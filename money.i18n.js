@@ -225,7 +225,8 @@ const I18N = {
     calOtherShift: '{n} shift', calLegendOther: '{n} shift that day', otherSwitch: 'Switch', otherRowLabel: '{n} shift, {d}, {t}. Switch to {n}',
     fieldProfile: 'Profile', clashOther: 'Overlaps your {n} shift on {d}, {t}', clashOtherSub: 'Check the times, or save anyway if both are right.',
     weekClashOther: 'Overlaps your {n} shift {t}', savedToProfile: 'Shift saved to {n}',
-    allLineMonth: 'All profiles in {m}', allLineAll: 'All profiles, all time', allTitle: 'All profiles', allTotal: 'Total',
+    allTitle: 'All profiles', allTotal: 'Total', allBack: 'Back', allEach: 'Each profile', allEdit: 'Edit', allThatDay: 'That day',
+    allDayLabel: '{d}: {h} in {p}', allDots: 'Profiles worked that day',
     pcStatusOk: 'Paycheck ✓', pcStatusMissing: 'No paycheck yet'
   },
   he: {
@@ -439,7 +440,8 @@ const I18N = {
     calOtherShift: 'משמרת ב־{n}', calLegendOther: 'משמרת ב־{n} באותו יום', otherSwitch: 'מעבר', otherRowLabel: 'משמרת ב־{n}, {d}, {t}. מעבר ל־{n}',
     fieldProfile: 'פרופיל', clashOther: 'חופף למשמרת שלך ב־{n}, {d}, {t}', clashOtherSub: 'כדאי לבדוק את השעות, או לשמור בכל זאת אם שתיהן נכונות.',
     weekClashOther: 'חופף למשמרת שלך ב־{n} {t}', savedToProfile: 'המשמרת נשמרה ב־{n}',
-    allLineMonth: 'כל הפרופילים ב{m}', allLineAll: 'כל הפרופילים, כל הזמנים', allTitle: 'כל הפרופילים', allTotal: 'סה״כ',
+    allTitle: 'כל הפרופילים', allTotal: 'סה״כ', allBack: 'חזרה', allEach: 'כל פרופיל', allEdit: 'עריכה', allThatDay: 'באותו יום',
+    allDayLabel: '{d}: {h} ב־{p}', allDots: 'פרופילים שעבדת בהם באותו יום',
     pcStatusOk: 'תלוש ✓', pcStatusMissing: 'אין תלוש עדיין'
   }
 };
