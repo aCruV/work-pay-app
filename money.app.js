@@ -7,6 +7,7 @@
   const MINUTES = Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
   const CATEGORY_KEYS = ['driving','cashback','bonus','reimbursement','other'];
   const ICON_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
+  const ICON_CHEV_L = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
   const ICON_CHEV_R = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
   const ICON_CHEV_D = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
   const ICON_CHEV_U = '<svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>';
@@ -1720,24 +1721,44 @@
     if (file && /^\d{4}-\d{2}$/.test(month || '')) uploadPaycheck(month, file);
   });
 
-  // From the 10th, if last month has shifts but no paycheck, Summary asks for it (until added or dismissed).
+  // Every past month of the last PC_REMIND_MONTHS that has shifts but no paycheck is listed on Summary
+  // (last month only from the 10th). "Not now" hides the months shown until another one goes missing.
+  const PC_REMIND_MONTHS = 12;
+  function pcDismissedMonths() {
+    let raw = '';
+    try { raw = localStorage.getItem(pcDismissKey()) || ''; } catch (e) {}
+    if (isValidMonth(raw)) return [raw]; // saved by the version that reminded about one month only
+    try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter(isValidMonth) : []; } catch (e) { return []; }
+  }
+  function missingPaycheckMonths() {
+    const d = new Date(), dismissed = new Set(pcDismissedMonths()), out = [];
+    for (let k = PC_REMIND_MONTHS; k >= 1; k--) {
+      if (k === 1 && d.getDate() < PC_REMIND_DAY) continue;
+      const m = new Date(d.getFullYear(), d.getMonth() - k, 1);
+      const month = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`;
+      if (!dismissed.has(month) && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && !pcSaving.has(month)) out.push(month);
+    }
+    return out; // oldest first
+  }
   function renderPaycheckReminder(el) {
-    const d = new Date();
-    const prev = new Date(d.getFullYear(), d.getMonth() - 1, 1);
-    const month = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-    let dismissed = '';
-    try { dismissed = localStorage.getItem(pcDismissKey()) || ''; } catch (e) {}
-    const show = !!currentUser && paychecksLoaded && d.getDate() >= PC_REMIND_DAY && dismissed !== month
-      && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && !pcSaving.has(month);
-    el.classList.toggle('hidden', !show);
-    if (!show) { el.innerHTML = ''; return; }
-    el.innerHTML = `<span class="pc-ico">${ICON_CLIP}</span>
-      <span class="pc-rem-text">${escapeHtml(t('pcReminder').replace('{m}', monthLongLabel(month)))}</span>
-      <button type="button" class="pc-rem-btn" id="pcRemAdd">${escapeHtml(t('pcReminderAdd'))}</button>
-      <button type="button" class="pc-rem-btn pc-rem-dismiss" id="pcRemDismiss">${escapeHtml(t('pcReminderDismiss'))}</button>`;
-    $('pcRemAdd').addEventListener('click', () => { selectMonth(month); pickPaycheck(month); });
+    const months = currentUser && paychecksLoaded ? missingPaycheckMonths() : [];
+    el.classList.toggle('hidden', !months.length);
+    if (!months.length) { el.innerHTML = ''; return; }
+    const thisYear = new Date().getFullYear();
+    const chipLabel = m => +m.slice(0, 4) === thisYear
+      ? new Date(m + '-01T00:00:00').toLocaleDateString(getLang() === 'he' ? 'he-IL' : undefined, { month: 'short' })
+      : monthLabel(m);
+    const one = months.length === 1;
+    el.classList.toggle('many', !one);
+    el.innerHTML = `<div class="pc-rem-head"><span class="pc-ico">${ICON_CLIP}</span>
+        <span class="pc-rem-text">${escapeHtml(one ? t('pcReminder').replace('{m}', monthLongLabel(months[0])) : t('pcReminderMany').replace('{n}', months.length))}</span>
+        ${one ? `<button type="button" class="pc-rem-btn" data-pc-month="${months[0]}">${escapeHtml(t('pcReminderAdd'))}</button>` : ''}
+        <button type="button" class="pc-rem-btn pc-rem-dismiss" id="pcRemDismiss">${escapeHtml(t('pcReminderDismiss'))}</button></div>
+      ${one ? '' : `<div class="pc-rem-chips">${months.map(m => `<button type="button" class="pc-rem-chip" data-pc-month="${m}" aria-label="${escapeHtml(t('pcReminderChip').replace('{m}', monthLongLabel(m)))}">${ICON_PLUS}<span>${escapeHtml(chipLabel(m))}</span></button>`).join('')}</div>`}`;
+    el.querySelectorAll('[data-pc-month]').forEach(b => b.addEventListener('click', () => { selectMonth(b.dataset.pcMonth); pickPaycheck(b.dataset.pcMonth); }));
     $('pcRemDismiss').addEventListener('click', () => {
-      try { localStorage.setItem(pcDismissKey(), month); } catch (e) {}
+      const keep = pcDismissedMonths().concat(months).slice(-24);
+      try { localStorage.setItem(pcDismissKey(), JSON.stringify(Array.from(new Set(keep)))); } catch (e) {}
       renderPaycheckReminder(el);
     });
   }
@@ -3594,6 +3615,7 @@
       else localStorage.removeItem(REMEMBER_KEY);
     } catch(e) {}
     setAuthBusy(true);
+    signingUp = authMode === 'signup';
     const persistence = remember ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
     auth.setPersistence(persistence)
       .then(() => authMode === 'signin'
@@ -3603,6 +3625,7 @@
       .catch(err => {
         if (CREDENTIAL_ERRORS.includes(err && err.code)) registerFailure();
         if (lockRemainingSec() === 0) authMsg(authErrorMessage(err));
+        signingUp = false;
       })
       .finally(() => setAuthBusy(false));
   });
@@ -3816,7 +3839,127 @@
   function hideAuthScreen() {
     $('authScreen').classList.remove('loading');
     $('authScreen').classList.add('hidden');
+    if (currentUser && onboardingPending(currentUser.uid)) openOnboarding();
     hideSplash();
+  }
+
+  // ---- first-run setup: shown once after creating an account (and again on this device if closed halfway) ----
+  // Three short pages in the Settings style: language, pay, weekend & extras, then a finish page.
+  // Every change is saved straight into the settings, so Skip (or closing the app) keeps whatever was set.
+  const ONBOARD_KEY = 'workTrackerOnboard'; // holds the uid of the account still to be set up on this device
+  let signingUp = false; // a sign-up is in flight: the account it creates gets the setup
+  let obStep = 0;
+  function onboardingPending(uid) { try { return localStorage.getItem(ONBOARD_KEY) === uid; } catch (e) { return false; } }
+  function setOnboardingPending(uid) { try { if (uid) localStorage.setItem(ONBOARD_KEY, uid); else localStorage.removeItem(ONBOARD_KEY); } catch (e) {} }
+  function openOnboarding() {
+    obStep = 0;
+    $('onboard').classList.remove('hidden', 'closing');
+    renderOnboarding(0);
+  }
+  function closeOnboarding(then) {
+    setOnboardingPending(null);
+    const el = $('onboard');
+    el.classList.add('closing');
+    setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); el.innerHTML = ''; if (then) then(); else replayEntrance(activeTab); }, reduceMotion.matches ? 0 : 220);
+  }
+  // The logo for these pages, copied from the launch screen's drawing but still and with its own colours
+  // (the launch screen and its gradients are gone once it closes).
+  let obMarkHtml = null;
+  function obMark() {
+    if (obMarkHtml !== null || !splashTemplate) return obMarkHtml || '';
+    const svg = splashTemplate.querySelector('.splash-mark').cloneNode(true);
+    const mask = svg.querySelector('mask');
+    if (mask) mask.remove();
+    svg.querySelectorAll('[mask]').forEach(e => e.removeAttribute('mask'));
+    svg.querySelectorAll('[id]').forEach(e => { e.id = e.id.replace('splash', 'ob'); });
+    svg.querySelectorAll('.splash-person').forEach(e => e.setAttribute('class', 'ob-p'));
+    svg.querySelectorAll('.splash-hand').forEach(e => e.setAttribute('class', 'ob-h'));
+    svg.setAttribute('class', 'ob-mark-svg');
+    svg.setAttribute('aria-hidden', 'true');
+    return (obMarkHtml = svg.outerHTML);
+  }
+  function obInput(id, value, attrs) { return `<input id="${id}" value="${escapeHtml(String(value))}" ${attrs}>`; }
+  function obDaySelect(id, dow) {
+    return `<select id="${id}" aria-label="${escapeHtml(t(id === 'obWkStartDow' ? 'rowStartDay' : 'rowEndDay'))}">${DOW_FULL[getLang()].map((d, i) => `<option value="${i}"${i === dow ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('')}</select>`;
+  }
+  function renderOnboarding(dir) {
+    const s = state.settings, el = $('onboard'), last = 3;
+    const pct = (id, v, label) => `<div class="list-row"><label class="rlabel" for="${id}">${escapeHtml(t(label))}</label><span class="ob-num">${obInput(id, v, 'type="number" inputmode="decimal" min="0" max="1000"')}<span>%</span></span></div>`;
+    const pages = [
+      () => `<div class="ob-mark">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obWelcomeTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obWelcomeLead'))}</p>
+        <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(t('languageLabel'))}</div>
+          <div class="seg-toggle" id="obLang"><button type="button" class="seg-btn${getLang() === 'en' ? ' active' : ''}" data-lang="en">English</button><button type="button" class="seg-btn${getLang() === 'he' ? ' active' : ''}" data-lang="he">עברית</button></div></div></div>`,
+      () => `<h1 class="large-title" id="obTitle">${escapeHtml(t('obPayTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obPayLead'))}</p>
+        <div class="list-group"><div class="list-row"><label class="rlabel" for="obRate">${escapeHtml(t('rowRate'))}</label>${obInput('obRate', s.rate, 'type="number" inputmode="decimal" min="0" step="0.5"')}</div>
+          <div class="list-row"><label class="rlabel" for="obCurrency">${escapeHtml(t('rowCurrency'))}</label>${obInput('obCurrency', s.currency, 'type="text" maxlength="4"')}</div></div>
+        <div class="section-footer">${escapeHtml(t('obPayFoot'))}</div>`,
+      () => `<h1 class="large-title" id="obTitle">${escapeHtml(t('obRulesTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obRulesLead'))}</p>
+        <div class="section-header">${escapeHtml(t('obWeekendSec'))}</div>
+        <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(t('obStarts'))}</div><span class="ob-when">${obDaySelect('obWkStartDow', s.weekendStartDow)}${obInput('obWkStartTime', s.weekendStartTime, 'type="time" aria-label="' + escapeHtml(t('rowStartTime')) + '"')}</span></div>
+          <div class="list-row"><div class="rlabel">${escapeHtml(t('obEnds'))}</div><span class="ob-when">${obDaySelect('obWkEndDow', s.weekendEndDow)}${obInput('obWkEndTime', s.weekendEndTime, 'type="time" aria-label="' + escapeHtml(t('rowEndTime')) + '"')}</span></div>
+          ${pct('obWkPercent', s.weekendPercent, 'obPays')}</div>
+        <div class="section-header">${escapeHtml(t('obExtrasSec'))}</div>
+        <div class="list-group">${pct('obHolidayPercent', s.holidayPercent, 'obHoliday')}
+          <div class="list-row"><label class="rlabel" for="obOtThreshold">${escapeHtml(t('obOtAfter'))}</label>${obInput('obOtThreshold', s.overtimeThreshold, 'type="number" inputmode="decimal" min="0" max="24" step="0.5"')}</div>
+          ${pct('obOtPercent', s.overtimePercent, 'obOtPays')}</div>`,
+      () => `<div class="ob-mark ob-mark-done">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obDoneTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obDoneLead'))}</p>`
+    ];
+    const dots = [0, 1, 2].map(i => `<i class="${i === Math.min(obStep, 2) ? 'on' : ''}"></i>`).join('');
+    el.innerHTML = `<div class="ob-top">
+        ${obStep ? `<button type="button" class="ob-back" id="obBack">${ICON_CHEV_L}<span>${escapeHtml(t('obBack'))}</span></button>` : '<span></span>'}
+        <div class="ob-dots" aria-hidden="true">${dots}</div>
+        ${obStep < last ? `<button type="button" class="ob-skip" id="obSkip">${escapeHtml(t('obSkip'))}</button>` : '<span></span>'}</div>
+      <div class="ob-body${dir ? (dir > 0 ? ' fwd' : ' back') : ''}">${pages[obStep]()}</div>
+      <div class="ob-foot">${obStep < last
+        ? `<button type="button" class="btn-accent btn-block" id="obNext">${escapeHtml(t('obContinue'))}</button>`
+        : `<button type="button" class="btn-accent btn-block" id="obAddFirst">${escapeHtml(t('obAddFirst'))}</button><button type="button" class="ob-link" id="obSummary">${escapeHtml(t('obGoSummary'))}</button>`}</div>`;
+    const go = d => { obStep = Math.max(0, Math.min(last, obStep + d)); renderOnboarding(d); };
+    if ($('obBack')) $('obBack').addEventListener('click', () => go(-1));
+    if ($('obNext')) $('obNext').addEventListener('click', () => go(1));
+    if ($('obSkip')) $('obSkip').addEventListener('click', () => closeOnboarding());
+    if ($('obSummary')) $('obSummary').addEventListener('click', () => { switchTab('summary'); closeOnboarding(); });
+    if ($('obAddFirst')) $('obAddFirst').addEventListener('click', () => closeOnboarding(() => { switchTab('shifts'); openShiftSheet(null); }));
+    if ($('obLang')) $('obLang').querySelectorAll('[data-lang]').forEach(b => b.addEventListener('click', () => {
+      if (getLang() === b.dataset.lang) return;
+      state.settings.language = b.dataset.lang;
+      save();
+      applyLanguage();
+      renderOnboarding(0);
+    }));
+    el.querySelectorAll('.ob-body input, .ob-body select').forEach(i => i.addEventListener('change', readOnboarding));
+  }
+  // Same checks as the Settings fields: anything invalid keeps the previous value instead of being clamped.
+  function readOnboarding() {
+    const s = state.settings;
+    let rejected = false;
+    const has = id => !!$(id);
+    const field = (id, min, max, current) => {
+      if (!has(id)) return current;
+      const raw = $(id).value.trim(), n = parseFloat(raw);
+      if (raw !== '' && Number.isFinite(n) && n >= min && n <= max) return n;
+      if (n !== current) rejected = true;
+      return current;
+    };
+    const time = (id, current) => { if (!has(id)) return current; if (isValidTime($(id).value)) return $(id).value; rejected = true; return current; };
+    if (has('obCurrency')) s.currency = $('obCurrency').value.trim().slice(0, LIMITS.currency) || s.currency;
+    s.rate = field('obRate', 0, 100000, s.rate);
+    if (has('obWkStartDow')) s.weekendStartDow = +$('obWkStartDow').value;
+    if (has('obWkEndDow')) s.weekendEndDow = +$('obWkEndDow').value;
+    s.weekendStartTime = time('obWkStartTime', s.weekendStartTime);
+    s.weekendEndTime = time('obWkEndTime', s.weekendEndTime);
+    s.weekendPercent = field('obWkPercent', 0, 1000, s.weekendPercent);
+    s.holidayPercent = field('obHolidayPercent', 0, 1000, s.holidayPercent);
+    s.overtimeThreshold = field('obOtThreshold', 0, 24, s.overtimeThreshold);
+    s.overtimePercent = field('obOtPercent', 0, 1000, s.overtimePercent);
+    if (rejected) showToast(t('settingsInvalidKept'));
+    save();
+    loadSettingsForm();
+    resyncSettingsWheels();
+    updateSettingsPickerValues();
+    renderDataViews();
+    // show what was actually kept (e.g. after an invalid entry)
+    const show = { obRate: s.rate, obCurrency: s.currency, obWkStartTime: s.weekendStartTime, obWkEndTime: s.weekendEndTime, obWkPercent: s.weekendPercent, obHolidayPercent: s.holidayPercent, obOtThreshold: s.overtimeThreshold, obOtPercent: s.overtimePercent };
+    Object.keys(show).forEach(id => { if (has(id) && document.activeElement !== $(id)) $(id).value = show[id]; });
   }
 
   function startSync(user) {
@@ -3883,6 +4026,7 @@
         currentUser = user;
         remoteReady = false;
         $('accountEmail').textContent = user.email || '';
+        if (signingUp) { signingUp = false; setOnboardingPending(user.uid); }
         const fromForm = !$('authScreen').classList.contains('hidden') && !$('authScreen').classList.contains('loading');
         if (fromForm) showSplashAgain();
         startSync(user);
