@@ -1484,7 +1484,12 @@
     $('setOtThreshold').value = s.overtimeThreshold;
     $('setOtPercent').value = s.overtimePercent;
     $('setHebDates').checked = showHebrewDates();
+    PCT_FIELDS.forEach(fitPct);
   }
+  // A percentage field is as wide as its number, so "150%" stays together at the row's end in either direction.
+  const PCT_FIELDS = ['setWkPercent', 'setHolidayPercent', 'setOtPercent'];
+  function fitPct(id) { const el = $(id); el.style.width = (Math.max(1, el.value.length) + 0.4) + 'ch'; }
+  PCT_FIELDS.forEach(id => $(id).addEventListener('input', () => fitPct(id)));
   // Invalid or out-of-range input (e.g. a negative rate) keeps the previous value instead of
   // being clamped, so a typo can never silently turn pay into 0.
   function readSettingsForm() {
@@ -1539,11 +1544,11 @@
     downloadBlob(blob, filename);
   }
 
-  $('exportBtn').addEventListener('click', () => {
+  function exportBackup() {
     // the whole account: every profile (for one profile, exactly the same file as before)
     const blob = new Blob([JSON.stringify(currentDoc(), null, 2)], { type: 'application/json' });
     deliverFile(blob, 'work-tracker-backup-' + todayStr() + '.json');
-  });
+  }
 
   $('importInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -1579,6 +1584,7 @@
       } else {
         state = normalizeState(data);
       }
+      if (sheetMode === 'restore') closeSheetOverlay();
       save();
       refreshAll();
       offerUndo(t('alertImportOk'));
@@ -1710,7 +1716,17 @@
     sheetMode = 'restore'; editingId = null;
     $('sheetTitle').textContent = t('restoreTitle');
     $('sheetSave').style.visibility = 'hidden';
-    $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreLoading'))}</div>`;
+    $('sheetBody').innerHTML = `
+      <div class="section-header" style="margin-top:0;">${escapeHtml(t('cloudBackupsHead'))}</div>
+      <div id="restoreList"><div class="empty-state">${escapeHtml(t('restoreLoading'))}</div></div>
+      <div class="section-footer">${escapeHtml(t('restoreHint'))}</div>
+      <div class="section-header">${escapeHtml(t('backupFileHead'))}</div>
+      <div class="list-group">
+        <button type="button" class="list-row row-btn" id="bkSaveFile"><span class="rlabel">${escapeHtml(t('btnExport'))}<span class="rsub">${escapeHtml(t('btnExportSub'))}</span></span><span class="entry-chevron">${ICON_CHEV_R}</span></button>
+        <button type="button" class="list-row row-btn" id="bkFromFile"><span class="rlabel">${escapeHtml(t('btnImport'))}<span class="rsub">${escapeHtml(t('btnImportSub'))}</span></span><span class="entry-chevron">${ICON_CHEV_R}</span></button>
+      </div>`;
+    $('bkSaveFile').addEventListener('click', exportBackup);
+    $('bkFromFile').addEventListener('click', () => $('importInput').click());
     openSheetOverlay();
     const uid = currentUser.uid;
     backupsRef(uid).get().then(snap => {
@@ -1719,15 +1735,14 @@
       docs.slice(BACKUP_KEEP_DAYS).forEach(d => d.ref.delete().catch(() => {}));
       const kept = docs.slice(0, BACKUP_KEEP_DAYS);
       if (!kept.length) {
-        $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreNone'))}</div>`;
+        $('restoreList').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreNone'))}</div>`;
         return;
       }
       const locale = getLang() === 'he' ? 'he-IL' : undefined;
       const labelFor = id => new Date(id + 'T00:00:00').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
       const entries = kept.map(d => ({ id: d.id, data: docToAccount((d.data() || {}).data) }));
       const shiftsIn = acc => acc.profiles.reduce((n, p) => n + p.data.shifts.length, 0);
-      $('sheetBody').innerHTML = `
-        <div class="section-footer" style="margin:0 4px 12px;">${escapeHtml(t('restoreHint'))}</div>
+      $('restoreList').innerHTML = `
         <div class="list-group">${entries.map(e => `
           <div class="list-row picker-row" data-backup="${e.id}">
             <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', shiftsIn(e.data)))}</span></div>
@@ -1747,7 +1762,7 @@
       }));
     }).catch(err => {
       console.error('Loading backups failed:', err);
-      if (sheetMode === 'restore') $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreFailed'))}</div>`;
+      if (sheetMode === 'restore') $('restoreList').innerHTML = `<div class="empty-state">${escapeHtml(t('restoreFailed'))}</div>`;
     });
   }
   $('restoreBtn').addEventListener('click', openRestoreSheet);
@@ -2909,6 +2924,7 @@
     if (pcZoomHistory) { pcZoomHistory = false; closePaycheckZoom(false, true); return; }
     if (addProfileHistory) { addProfileHistory = false; addProfileBack(); return; }
     if (sheetHistory) { sheetHistory = false; if (sheetIsOpen()) closeSheetOverlay(); return; }
+    if (setPageHistory) { setPageHistory = false; closeSetPage(true); return; }
     if (allPageHistory) { allPageHistory = false; closeAllProfilesPage(true); }
   });
   // instant: no slide-down (when something else already covers the sheet, e.g. the All profiles page)
@@ -3085,7 +3101,116 @@
     $('wkEndDayValue').textContent = DOW_FULL[lang][state.settings.weekendEndDow];
     $('wkEndTimeValue').textContent = state.settings.weekendEndTime;
     $('wkNoWindowHint').classList.toggle('hidden', windowDurationMinutes(state.settings) !== 0);
+    renderWeekStrip();
+    renderSettingsSummary();
   }
+
+  // ---- Settings: the job card and each pay rule said in words; the details open on pages that slide in ----
+  // A percentage is kept left to right, so Hebrew shows "150%" and not "%150".
+  const pctText = n => '\u2066' + n + '%\u2069';
+  const dayWord = d => getLang() === 'he' ? DOW_FULL.he[d].replace('יום ', '') : dowShort(d);
+  // 8 hours from the start of the weekend window (a weekday morning without one), worked out by calcShift on a
+  // far-off date, so no real shift is near enough to carry overtime into it.
+  function payExample() {
+    const s = state.settings, win = windowDurationMinutes(s) > 0;
+    const d = new Date(2099, 0, 4 + (win ? s.weekendStartDow : 2)); // 4 Jan 2099 is a Sunday
+    const start = win ? s.weekendStartTime : '09:00';
+    const endMin = (timeToMinutes(start) + 480) % 1440;
+    const end = String(Math.floor(endMin / 60)).padStart(2, '0') + ':' + String(endMin % 60).padStart(2, '0');
+    const pay = calcShift({ id: '__example', date: dateStr(d), startTime: start, endTime: end, isHoliday: false }).pay;
+    const label = win ? t('payExampleWeekend').replace('{d}', DOW_FULL[getLang()][s.weekendStartDow]).replace('{t}', start) : t('payExampleRegular');
+    return { label, pay };
+  }
+  function renderSettingsSummary() {
+    const s = state.settings, p = activeProfile(), name = profileName(p), many = account.profiles.length > 1;
+    $('profCardAv').innerHTML = profAvatar(p);
+    $('profCardName').textContent = name;
+    $('profCardSub').textContent = t('profCardRate').replace('{r}', money(s.rate)) + (many ? ' · ' + t('profCardJobs').replace('{n}', account.profiles.length) : '');
+    $('profEditRow').setAttribute('aria-label', t('profileEditBtn') + ': ' + name);
+    $('profAddRow').classList.toggle('hidden', account.profiles.length >= PROFILE_MAX);
+    const win = windowDurationMinutes(s) > 0;
+    $('wkRowSub').textContent = win ? `${dayWord(s.weekendStartDow)} ${s.weekendStartTime} – ${dayWord(s.weekendEndDow)} ${s.weekendEndTime}` : t('wkRowNone');
+    $('wkRowValue').textContent = pctText(s.weekendPercent);
+    $('otRowValue').textContent = s.overtimeThreshold > 0 ? t('otRowValue').replace('{p}', pctText(s.overtimePercent)).replace('{h}', shortHours(s.overtimeThreshold)) : t('otRowOff');
+    const ex = payExample();
+    $('payExampleLabel').textContent = ex.label;
+    $('payExampleValue').textContent = money(ex.pay);
+    const old = outdatedShiftsByMonth().length;
+    $('ratesNotice').classList.toggle('hidden', !old);
+    if (old) $('ratesNoticeText').textContent = old === 1 ? t('ratesNoticeOne') : t('ratesNoticeMany').replace('{n}', old);
+    $('payFooter').textContent = many ? t('footerPayFor').replace('{n}', name) : t('footerPay');
+    const adds = state.additions;
+    $('extrasRowValue').textContent = !adds.length ? t('noneYet') : adds.length === 1 ? money(additionAmountFor(adds[0], additionDisplayMonth(adds[0]))) : String(adds.length);
+    $('templatesRowValue').textContent = state.templates.length ? String(state.templates.length) : t('noneYet');
+    let backedUp = false;
+    try { backedUp = !!currentUser && localStorage.getItem('workTrackerBackup_' + currentUser.uid) === todayStr(); } catch (e) {}
+    $('backupSub').textContent = t(backedUp ? 'backupToday' : 'backupDaily');
+    $('appFooter').classList.toggle('hidden', !many);
+    if (spKey) renderSetPageHead();
+  }
+  // The weekend window as a week: each day's column is filled for the part of it inside the window (as on the calendar).
+  function renderWeekStrip() {
+    const s = state.settings, mins = windowDurationMinutes(s);
+    let heads = '', cols = '';
+    for (let d = 0; d < 7; d++) {
+      const bands = weekendBands(d, s);
+      heads += `<span class="wk-d${bands.length ? ' on' : ''}">${escapeHtml(dowShort(d))}</span>`;
+      cols += `<span class="wk-col">${bands.map(([a, b]) => `<i style="top:${a / 14.4}%;height:${(b - a) / 14.4}%"></i>`).join('')}</span>`;
+    }
+    $('wkStrip').innerHTML = heads + cols;
+    $('wkStripCap').innerHTML = mins ? escapeHtml(t('wkStripCap')).replace('{h}', `<b>${escapeHtml(hrsText(shortHours(mins / 60)))}</b>`) : '';
+  }
+
+  // A page that slides in over Settings, like the All profiles page. It owns one history entry, so Back closes it.
+  const SET_PAGES = { weekend: 'rowWeekendRate', overtime: 'rowOvertime', extras: 'sectionAdditions', templates: 'sectionTemplates', rates: 'ratesPageTitle' };
+  let spKey = null, setPageHistory = false, spHideTimer = null;
+  function renderSetPageHead() {
+    $('spBack').innerHTML = `${ICON_CHEV_L}<span>${escapeHtml(t('titleSettings'))}</span>`;
+    $('spTitle').textContent = t(SET_PAGES[spKey]);
+    const p = activeProfile();
+    $('spFor').innerHTML = account.profiles.length > 1 ? `${profAvatar(p)}<span>${escapeHtml(t('spFor').replace('{n}', profileName(p)))}</span>` : '';
+  }
+  function openSetPage(key) {
+    spKey = key;
+    document.querySelectorAll('#setPage [data-sp]').forEach(b => b.classList.toggle('hidden', b.dataset.sp !== key));
+    document.querySelectorAll('#setPage .wheel-panel').forEach(x => x.classList.add('hidden'));
+    renderSetPageHead();
+    if (key === 'weekend') renderWeekStrip();
+    if (!setPageHistory) { try { history.pushState({ setPage: key }, ''); setPageHistory = true; } catch (e) {} }
+    const el = $('setPage');
+    clearTimeout(spHideTimer);
+    el.classList.remove('hidden', 'closing');
+    el.classList.add('opening');
+    $('spScroll').scrollTop = 0;
+    el.parentElement.scrollLeft = 0;
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove('opening');
+    };
+    const onEnd = e => { if (e.target === el) done(); };
+    el.addEventListener('animationend', onEnd);
+    setTimeout(done, 700);
+  }
+  // fromBack: the phone's Back already removed the page's history entry.
+  function closeSetPage(fromBack) {
+    if (!fromBack && setPageHistory) { setPageHistory = false; ignoreNextPop = true; history.back(); }
+    const el = $('setPage');
+    if (el.classList.contains('hidden') || el.classList.contains('closing')) return;
+    // a field still being typed in saves on blur, before the page goes
+    if (el.contains(document.activeElement)) document.activeElement.blur();
+    el.classList.remove('opening');
+    el.classList.add('closing');
+    spHideTimer = setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); spKey = null; }, 300);
+  }
+  $('spBack').addEventListener('click', () => closeSetPage(false));
+  $('wkRow').addEventListener('click', () => openSetPage('weekend'));
+  $('otRow').addEventListener('click', () => openSetPage('overtime'));
+  $('extrasRow').addEventListener('click', () => openSetPage('extras'));
+  $('templatesRow').addEventListener('click', () => openSetPage('templates'));
+  $('ratesNotice').addEventListener('click', () => openSetPage('rates'));
 
   // ---- earnings privacy: amounts show by default; the eye button blurs them, and the choice is remembered on this device ----
   const MONEY_HIDDEN_KEY = 'workTrackerMoneyHidden';
@@ -3184,6 +3309,7 @@
   function renderTemplatesSettings() {
     const el = $('templatesSettingsList');
     if (!el) return;
+    renderSettingsSummary();
     if (!state.templates.length) {
       el.innerHTML = `<div class="list-row"><div class="rlabel" style="color:var(--muted);">${t('templatesEmpty')}</div></div>`;
       return;
@@ -3286,6 +3412,7 @@
   function renderAdditionsSettings() {
     const el = $('additionsList');
     if (!el) return;
+    renderSettingsSummary();
     if (!state.additions.length) {
       el.innerHTML = `<div class="list-row"><div class="rlabel" style="color:var(--muted);">${escapeHtml(t('additionsEmpty'))}</div></div>`;
       return;
@@ -4323,9 +4450,7 @@
       b.innerHTML = `${profAvatar(p)}<span class="prof-name">${escapeHtml(name)}</span>${ICON_CHEV_D}${dot ? '<span class="prof-dot" aria-hidden="true"></span>' : ''}`;
       b.setAttribute('aria-label', t('profileBtnLabel').replace('{n}', name) + (dot ? '. ' + t('profileDotLabel') : ''));
     });
-    $('profSection').innerHTML = `${profAvatar(p, 'sm')}<span class="prof-label">${escapeHtml(t('profileSection').replace('{n}', name))}</span>`;
-    $('profEditValue').textContent = name;
-    $('profAddRow').classList.toggle('hidden', account.profiles.length >= PROFILE_MAX);
+    renderSettingsSummary();
   }
 
   // Opening a profile. `state` becomes its data; everything on screen is drawn again for it.
