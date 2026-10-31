@@ -345,15 +345,22 @@
   .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
   [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
   /* the All profiles page (from the switcher): every job's shifts and totals on one calendar */
-  /* Always laid out, parked just off the side while closed, so opening is only a slide (nothing has to be built as it
-     starts). It slides in over the switcher, which stays dimmed underneath and closes once it's covered. */
-  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column;
-    transform: translate3d(0, 0, 0); transition: transform .42s cubic-bezier(.22, .61, .36, 1), visibility 0s; }
+  /* Slides in like the sheets (same kind of animation), sideways and over the switcher, which stays dimmed underneath and
+     closes once it's covered. While it moves its content doesn't scroll: iPhone Safari moves a scrolling area inside a
+     moving page on its own (the page jumped into place and only its content slid), so it moves as one piece instead. */
+  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; }
+  .allpage.hidden { display: none; }
   .allpage.raised { z-index: 35; }
-  .allpage.hidden { transform: translate3d(100%, 0, 0); visibility: hidden; pointer-events: none; transition: transform .42s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .42s; }
-  [dir="rtl"] .allpage.hidden { transform: translate3d(-100%, 0, 0); }
-  .allpage.hidden.closing { transition: transform .28s cubic-bezier(.4, 0, .9, .6), visibility 0s linear .28s; }
-  .ap-scroll { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(10px + env(safe-area-inset-top)) 16px calc(30px + env(safe-area-inset-bottom)); }
+  .allpage.opening { animation: apIn .42s cubic-bezier(.22, .61, .36, 1) both; }
+  .allpage.closing { animation: apOut .28s cubic-bezier(.4, 0, .9, .6) both; pointer-events: none; }
+  [dir="rtl"] .allpage.opening { animation-name: apInRtl; }
+  [dir="rtl"] .allpage.closing { animation-name: apOutRtl; }
+  .allpage.opening .ap-scroll, .allpage.closing .ap-scroll { overflow: hidden; }
+  @keyframes apIn { from { transform: translate3d(100%, 0, 0); } to { transform: translate3d(0, 0, 0); } }
+  @keyframes apInRtl { from { transform: translate3d(-100%, 0, 0); } to { transform: translate3d(0, 0, 0); } }
+  @keyframes apOut { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(100%, 0, 0); } }
+  @keyframes apOutRtl { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-100%, 0, 0); } }
+  .ap-scroll { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; padding: calc(10px + env(safe-area-inset-top)) 16px calc(30px + env(safe-area-inset-bottom)); }
   .ap-nav { display: flex; align-items: center; justify-content: space-between; min-height: 44px; }
   .ap-back { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 16px; color: var(--accent); padding: 10px 0; cursor: pointer; }
   .ap-back svg { width: 20px; height: 20px; }
@@ -376,9 +383,8 @@
   .ap-edit .ico-chev { width: 13px; height: 13px; transform: rotate(-90deg); }
   [dir="rtl"] .ap-edit .ico-chev { transform: rotate(90deg); }
   @media (prefers-reduced-motion: reduce) {
-    .allpage, .allpage.hidden, [dir="rtl"] .allpage.hidden, .allpage.hidden.closing { transform: none; transition: opacity .2s ease, visibility 0s linear .2s; }
-    .allpage { transition: opacity .2s ease, visibility 0s; }
-    .allpage.hidden { opacity: 0; }
+    .allpage.opening, [dir="rtl"] .allpage.opening { animation: fadeIn .2s ease both; }
+    .allpage.closing, [dir="rtl"] .allpage.closing { animation: fadeOut .2s ease both; }
   }
   .all-split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px; }
   .all-split i { display: block; background: var(--pf); min-width: 4px; }

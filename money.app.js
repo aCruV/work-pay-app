@@ -4377,36 +4377,36 @@
     if (sheetHistory) sheetHistory = false;
     else { try { history.pushState({ allProfiles: true }, ''); } catch (e) {} }
     allPageHistory = true;
-    // Filled in and laid out while still parked off the side, then it only slides. It slides over the switcher, which
-    // keeps its dimming underneath (nothing brightens mid-slide) and closes at once when the page has covered it.
+    // Filled in first, then it slides over the switcher, which keeps its dimming underneath (nothing brightens mid-slide)
+    // and closes at once when the page has covered it. Scrolling comes back when the slide ends (see the CSS).
     const el = $('allPage');
-    $('apScroll').scrollTop = 0;
+    clearTimeout(apHideTimer);
     renderAllPage(true);
+    el.classList.remove('hidden', 'closing');
+    el.classList.add('raised', 'opening');
+    $('apScroll').scrollTop = 0;
     const act = $('apPills').querySelector('.pill.active');
     if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    el.classList.remove('closing');
-    el.classList.add('raised');
-    void el.offsetWidth;
-    el.classList.remove('hidden');
     let finished = false;
     const done = () => {
       if (finished) return;
       finished = true;
-      el.removeEventListener('transitionend', onEnd);
-      el.classList.remove('raised');
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove('raised', 'opening');
       if (sheetMode === 'profiles' && sheetIsOpen()) closeSheetOverlay(true);
     };
-    const onEnd = e => { if (e.target === el && (e.propertyName === 'transform' || e.propertyName === 'opacity')) done(); };
-    el.addEventListener('transitionend', onEnd);
-    setTimeout(done, 650);
+    const onEnd = e => { if (e.target === el) done(); };
+    el.addEventListener('animationend', onEnd);
+    setTimeout(done, 700);
   }
+  let apHideTimer = null;
   function hideAllPage() {
     const el = $('allPage');
-    if (el.classList.contains('hidden')) return;
-    el.classList.remove('raised');
-    // slides back out (a little faster than it came in); 'closing' only picks that quicker curve
-    el.classList.add('closing', 'hidden');
-    setTimeout(() => el.classList.remove('closing'), 320);
+    if (el.classList.contains('hidden') || el.classList.contains('closing')) return;
+    // slides back out, a little faster than it came in
+    el.classList.remove('raised', 'opening');
+    el.classList.add('closing');
+    apHideTimer = setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); }, 300);
   }
   // fromBack: the phone's Back already removed the page's history entry.
   function closeAllProfilesPage(fromBack) {
