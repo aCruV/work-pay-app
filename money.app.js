@@ -4413,7 +4413,7 @@
     if (!fromBack && allPageHistory) { allPageHistory = false; ignoreNextPop = true; history.back(); }
     hideAllPage();
   }
-  // Leaving the page for one profile (a job row, or Edit on a day's shift): the day's sheet, the page and their
+  // Leaving the page for one profile (Edit on a day's shift): the day's sheet, the page and their
   // history entries go together, then that profile opens (on that day when one is given).
   function leaveAllPageFor(id, date) {
     let n = 0;
@@ -4498,14 +4498,13 @@
     };
     const goal = on ? combinedGoalNumbers(month) : null;
     $('apJobs').innerHTML = `<div class="section-header">${escapeHtml(t('allEach'))}</div>
-      <div class="list-group">${rows.map(r => `<button type="button" class="list-row row-btn all-row" data-prof="${escapeHtml(r.p.id)}">${profAvatar(r.p)}
+      <div class="list-group">${rows.map(r => `<div class="list-row all-row" data-prof="${escapeHtml(r.p.id)}">${profAvatar(r.p)}
           <span class="rlabel">${escapeHtml(profileName(r.p))}<span class="rsub">${escapeHtml(hrsText(fmt(r.hours)))} · ${escapeHtml(money(profileDataById(r.p.id).settings.rate))} ${escapeHtml(t('rsPerHour'))}</span></span>
-          <span class="all-row-end"><span class="stat-val money-private">${escapeHtml(money(r.pay))}</span>${pcStatus(r)}</span></button>`).join('')}
+          <span class="all-row-end"><span class="stat-val money-private">${escapeHtml(money(r.pay))}</span>${pcStatus(r)}</span></div>`).join('')}
         <div class="list-row bd-total"><span class="rlabel">${escapeHtml(t('allTotal'))}</span><span class="stat-val money-private">${escapeHtml(money(pay))}</span></div></div>
       ${goal ? `<div class="section-header" style="margin-top:18px;">${escapeHtml(t('combinedGoalToggle'))}</div>
         <div class="list-group"><div class="cg-progress"><div class="cg-line"><span>${escapeHtml(goal.ach)}</span><b>${escapeHtml(goal.pctText)}</b></div>
           <div class="cg-bar"><i class="${goal.reached ? 'done' : ''}" style="transform:scaleX(${goal.pct})"></i></div><div class="cg-rem">${escapeHtml(goal.rem)}</div></div></div>` : ''}`;
-    $('apJobs').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => leaveAllPageFor(b.dataset.prof)));
   }
 
   // Tapping a day with shifts: every profile's shifts that day, each with Edit (opens that profile on that day).
