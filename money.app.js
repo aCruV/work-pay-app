@@ -133,6 +133,9 @@
       goalValue: goalType === 'income' ? goalIncome : goalHours,
       goalHours, goalIncome
     });
+    // Appearance and Hebrew dates, once chosen, are saved on the account (absent: this phone's own choice is used).
+    if (s.theme === 'auto' || s.theme === 'light' || s.theme === 'dark') settings.theme = s.theme;
+    if (typeof s.hebDates === 'boolean') settings.hebDates = s.hebDates;
     const seen = new Set();
     const uniqueId = v => {
       let id = typeof v === 'string' && ID_RE.test(v) ? v : genId();
@@ -196,6 +199,76 @@
     return { settings, rateSets: rateSets.filter(r => usedRateIds.has(r.id)), shifts, additions, templates };
   }
 
+  // ---- profiles: one per job, all in the same account document ----
+  // The first profile is stored exactly where the data always was (settings, shifts, ... at the top),
+  // so an account with one profile keeps today's document. Extra profiles sit in `profiles`, the first
+  // one's name/colour in `profile`, the goal for all profiles in `combined`, and `v: 2` marks an account
+  // that uses any of this (the rules then refuse saves from older app versions, which would drop them).
+  // In the app, `account.profiles` holds every profile the same way; `state` is always the open one.
+  const PROFILE_MAX = 5;
+  const PROFILE_NAME_MAX = 24;
+  const MAIN_PROFILE = 'main';
+  const PROFILE_COLORS = ['teal', 'violet', 'gold', 'rose', 'slate'];
+  // The same in every profile. An extra profile's settings are the other 13 keys; firestore.rules caps them
+  // at 13 (isValidProfileSettings), so a new setting needs that cap raised first.
+  const SHARED_KEYS = ['language', 'currency', 'theme', 'hebDates'];
+  function pickShared(settings) {
+    const o = {};
+    SHARED_KEYS.forEach(k => { if (k in settings) o[k] = settings[k]; });
+    return o;
+  }
+  function profileMeta(m, fallbackId) {
+    const src = m && typeof m === 'object' ? m : {};
+    return {
+      id: typeof src.id === 'string' && ID_RE.test(src.id) ? src.id : fallbackId,
+      name: str(src.name, PROFILE_NAME_MAX).trim(),
+      color: PROFILE_COLORS.includes(src.color) ? src.color : ''
+    };
+  }
+  function normalizeCombined(c) {
+    if (!c || typeof c !== 'object' || c.on !== true) return null;
+    return { on: true, goalType: c.goalType === 'income' ? 'income' : 'hours', goalHours: num(c.goalHours, 0, GOAL_MAX.hours, 0), goalIncome: num(c.goalIncome, 0, GOAL_MAX.income, 0) };
+  }
+  function docToAccount(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const first = normalizeState(src);
+    const shared = pickShared(first.settings);
+    const profiles = [Object.assign(profileMeta(src.profile, MAIN_PROFILE), { data: first })];
+    const seen = new Set([profiles[0].id]);
+    let room = LIMITS.shifts - first.shifts.length; // all profiles together keep the 3,000-shift cap
+    (Array.isArray(src.profiles) ? src.profiles : []).slice(0, PROFILE_MAX - 1).forEach(p => {
+      const meta = profileMeta(p, null);
+      if (!meta.id || seen.has(meta.id)) return;
+      seen.add(meta.id);
+      const data = normalizeState(Object.assign({}, p, { settings: Object.assign({}, p.settings, shared) }));
+      if (data.shifts.length > room) data.shifts = data.shifts.slice(0, Math.max(0, room));
+      room -= data.shifts.length;
+      profiles.push(Object.assign(meta, { data }));
+    });
+    return { v: src.v === 2 ? 2 : 0, shared, combined: normalizeCombined(src.combined), profiles };
+  }
+  function usesProfiles(acc) {
+    const first = acc.profiles[0];
+    return acc.v === 2 || acc.profiles.length > 1 || first.id !== MAIN_PROFILE || !!first.name || !!first.color
+      || !!acc.combined || 'theme' in acc.shared || 'hebDates' in acc.shared;
+  }
+  function accountToDoc(acc) {
+    const [first, ...rest] = acc.profiles;
+    const doc = JSON.parse(JSON.stringify(first.data));
+    SHARED_KEYS.forEach(k => { if (k in acc.shared) doc.settings[k] = acc.shared[k]; else delete doc.settings[k]; });
+    if (!usesProfiles(acc)) return doc;
+    doc.v = 2;
+    doc.profile = { id: first.id, name: first.name, color: first.color };
+    if (rest.length) doc.profiles = rest.map(p => {
+      const d = JSON.parse(JSON.stringify(p.data));
+      SHARED_KEYS.forEach(k => { delete d.settings[k]; });
+      return { id: p.id, name: p.name, color: p.color, settings: d.settings, rateSets: d.rateSets, shifts: d.shifts, additions: d.additions, templates: d.templates };
+    });
+    if (acc.combined) doc.combined = Object.assign({}, acc.combined);
+    return doc;
+  }
+  function normalizeDoc(raw) { return accountToDoc(docToAccount(raw)); }
+
   // ---- monthly additions ----
   function additionAmountFor(a, month) {
     if (month < a.from || (a.until && month > a.until)) return 0;
@@ -225,16 +298,16 @@
     return id;
   }
 
-  function load() {
+  function loadAccount() {
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) return normalizeState(JSON.parse(raw));
+      if (raw) return docToAccount(JSON.parse(raw));
     } catch(e) {}
     try {
       const oldRaw = localStorage.getItem(OLD_KEY);
-      if (oldRaw) return normalizeState(migrateFromV1(JSON.parse(oldRaw)));
+      if (oldRaw) return docToAccount(migrateFromV1(JSON.parse(oldRaw)));
     } catch(e) {}
-    return freshState();
+    return docToAccount(freshState());
   }
 
   // The last language used on this device, kept separately from the data so the sign-in
@@ -249,13 +322,38 @@
   // OWNER_KEY records which account the local cache belongs to, so one person's
   // cached data is never uploaded into, or shown to, a different account.
   const OWNER_KEY = 'workTrackerOwner';
+  // The profile last open on this device (each phone remembers its own; never synced).
+  const PROFILE_KEY = 'workTrackerProfile';
+  function storedProfileId() { try { return localStorage.getItem(PROFILE_KEY); } catch(e) { return null; } }
+  function rememberProfile(id) { try { localStorage.setItem(PROFILE_KEY, id); } catch(e) {} }
   function getCacheOwner() { try { return localStorage.getItem(OWNER_KEY); } catch(e) { return null; } }
   function clearLocalCache() {
-    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); localStorage.removeItem(OWNER_KEY); localStorage.removeItem(BASE_KEY); } catch(e) {}
+    try { localStorage.removeItem(KEY); localStorage.removeItem(OLD_KEY); localStorage.removeItem(OWNER_KEY); localStorage.removeItem(BASE_KEY); localStorage.removeItem(PROFILE_KEY); } catch(e) {}
     baseJson = null;
   }
 
-  let state = load();
+  let account = loadAccount();
+  let activeProfileId = (account.profiles.find(p => p.id === storedProfileId()) || account.profiles[0]).id;
+  let state = account.profiles.find(p => p.id === activeProfileId).data;
+  // The whole account as it is now: the open profile's data is always `state`, and the shared
+  // settings (language, currency, appearance, Hebrew dates) are read from it.
+  function currentAccount() {
+    return Object.assign({}, account, {
+      shared: pickShared(state.settings),
+      profiles: account.profiles.map(p => p.id === activeProfileId ? Object.assign({}, p, { data: state }) : p)
+    });
+  }
+  function currentDoc() { return accountToDoc(currentAccount()); }
+  // Replaces the whole account (sync, undo, restore); stays in the same profile if it still exists.
+  function setAccount(acc) {
+    account = acc;
+    const p = account.profiles.find(x => x.id === activeProfileId) || account.profiles[0];
+    activeProfileId = p.id;
+    state = p.data;
+  }
+  function totalShiftCount() {
+    return account.profiles.reduce((n, p) => n + (p.id === activeProfileId ? state.shifts : p.data.shifts).length, 0);
+  }
   let currentUser = null;
   let firestoreUnsub = null;
   // paychecks (see "paychecks" below); declared here because the Summary can be drawn before that code runs
@@ -295,14 +393,14 @@
   // overwriting it. It's stored next to the data, so offline changes still merge after a restart.
   const BASE_KEY = 'workTrackerSyncBase';
   let baseJson = (() => {
-    try { const raw = localStorage.getItem(BASE_KEY); return raw ? JSON.stringify(normalizeState(JSON.parse(raw))) : null; } catch(e) { return null; }
+    try { const raw = localStorage.getItem(BASE_KEY); return raw ? JSON.stringify(normalizeDoc(JSON.parse(raw))) : null; } catch(e) { return null; }
   })();
-  function setBase(data) { baseJson = data ? JSON.stringify(data) : null; }
-  function hasLocalChanges() { return baseJson !== null && JSON.stringify(state) !== baseJson; }
+  function setBase(doc) { baseJson = doc ? JSON.stringify(doc) : null; }
+  function hasLocalChanges() { return baseJson !== null && JSON.stringify(currentDoc()) !== baseJson; }
 
   function saveLocal() {
     try {
-      localStorage.setItem(KEY, JSON.stringify(state));
+      localStorage.setItem(KEY, JSON.stringify(currentDoc()));
       if (baseJson === null) localStorage.removeItem(BASE_KEY); else localStorage.setItem(BASE_KEY, baseJson);
       if (currentUser) localStorage.setItem(OWNER_KEY, currentUser.uid);
     } catch(e) {}
@@ -317,10 +415,15 @@
     // Both sides changed the same item (e.g. a note here while offline, custom pay on another device):
     // start from theirs and apply each field this device changed, so neither change is lost.
     // Only if both changed the same field does this device's value win.
+    // A shift's date and times are one choice: if this device changed any of them, all three come from
+    // here, so edits from two devices never combine into times neither of them entered.
+    const WHEN = ['date', 'startTime', 'endTime'];
     const mergeFields = (base, mine, theirs) => {
       const out = Object.assign({}, theirs);
-      new Set([...Object.keys(base), ...Object.keys(mine)]).forEach(k => {
-        if (JSON.stringify(mine[k]) === JSON.stringify(base[k])) return;
+      const changed = k => JSON.stringify(mine[k]) !== JSON.stringify(base[k]);
+      const whenChanged = WHEN.some(k => (k in base || k in mine) && changed(k));
+      new Set([...Object.keys(base), ...Object.keys(mine), ...(whenChanged ? WHEN : [])]).forEach(k => {
+        if (!(whenChanged && WHEN.includes(k)) && !changed(k)) return;
         if (k in mine) out[k] = mine[k]; else delete out[k];
       });
       return out;
@@ -354,6 +457,46 @@
     });
   }
 
+  // The same three-way merge for the whole account: each profile's data with mergeStates, profiles
+  // matched by id (added, renamed, recoloured, deleted), shared settings and the combined goal field by
+  // field. As with shifts, an edit beats a delete: a profile deleted on one device but changed on another
+  // comes back with the change.
+  function mergeAccounts(base, local, remote) {
+    base = base || { v: 0, shared: {}, combined: null, profiles: [] };
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const merge3 = (b, l, r) => {
+      const out = Object.assign({}, r);
+      new Set([...Object.keys(b), ...Object.keys(l)]).forEach(k => {
+        if (same(l[k], b[k])) return;
+        if (k in l) out[k] = l[k]; else delete out[k];
+      });
+      return out;
+    };
+    const bMap = new Map(base.profiles.map(p => [p.id, p]));
+    const lMap = new Map(local.profiles.map(p => [p.id, p]));
+    const rIds = new Set(remote.profiles.map(p => p.id));
+    const profiles = [];
+    remote.profiles.forEach(r => {
+      const l = lMap.get(r.id), b = bMap.get(r.id);
+      if (l) {
+        const meta = merge3(b ? { name: b.name, color: b.color } : {}, { name: l.name, color: l.color }, { name: r.name, color: r.color });
+        profiles.push({ id: r.id, name: meta.name || '', color: meta.color || '', data: mergeStates(b ? b.data : null, l.data, r.data) });
+      } else if (!b || !same(b, r)) profiles.push(r); // added there, or deleted here but changed there
+    });
+    local.profiles.forEach(l => {
+      if (rIds.has(l.id)) return;
+      const b = bMap.get(l.id);
+      if (!b || !same(b, l)) profiles.push(l); // added here, or deleted there but changed here
+    });
+    if (!profiles.length) profiles.push(remote.profiles[0]);
+    return docToAccount(accountToDoc({
+      v: Math.max(base.v, local.v, remote.v),
+      shared: merge3(base.shared, local.shared, remote.shared),
+      combined: same(local.combined, base.combined) ? remote.combined : local.combined,
+      profiles: profiles.slice(0, PROFILE_MAX)
+    }));
+  }
+
   // Changes are sent in a transaction that reads the cloud copy and merges this device's changes
   // into it, so two devices (or one that was offline) never overwrite each other's work. Rapid
   // changes (e.g. scrolling a wheel) become one write. Offline the transaction fails; the changes
@@ -370,25 +513,26 @@
     if (syncing) { syncAgain = true; return syncing; }
     const uid = currentUser.uid;
     const docRef = db.collection('users').doc(uid);
-    const sent = JSON.parse(JSON.stringify(state));
-    const base = baseJson === null ? null : JSON.parse(baseJson);
+    const sent = docToAccount(currentDoc());
+    const base = baseJson === null ? null : docToAccount(JSON.parse(baseJson));
     syncing = db.runTransaction(tx => tx.get(docRef).then(snap => {
       if (!remoteReady || !currentUser || currentUser.uid !== uid) throw new Error('sync-stopped');
-      const remote = snap.exists ? normalizeState(snap.data()) : null;
-      const merged = remote ? mergeStates(base, sent, remote) : normalizeState(sent);
-      inflightJson = JSON.stringify(merged);
-      if (!remote || inflightJson !== JSON.stringify(remote)) tx.set(docRef, merged);
+      const remote = snap.exists ? docToAccount(snap.data()) : null;
+      const merged = remote ? mergeAccounts(base, sent, remote) : sent;
+      const mergedDoc = accountToDoc(merged);
+      inflightJson = JSON.stringify(mergedDoc);
+      if (!remote || inflightJson !== JSON.stringify(accountToDoc(remote))) tx.set(docRef, mergedDoc);
       return merged;
     }))
       .then(merged => {
         if (!currentUser || currentUser.uid !== uid) return;
-        const before = JSON.stringify(state);
-        const changedMeanwhile = before !== JSON.stringify(sent);
-        setBase(merged);
+        const before = JSON.stringify(currentDoc());
+        const changedMeanwhile = before !== JSON.stringify(accountToDoc(sent));
+        setBase(accountToDoc(merged));
         // Edits made while the transaction ran are carried over onto the merged result.
-        state = changedMeanwhile ? mergeStates(sent, state, merged) : merged;
+        setAccount(changedMeanwhile ? mergeAccounts(sent, docToAccount(currentDoc()), merged) : merged);
         saveLocal();
-        if (JSON.stringify(state) !== before) refreshAll();
+        if (JSON.stringify(currentDoc()) !== before) refreshAll();
         if (changedMeanwhile) syncAgain = true;
       })
       .catch(err => {
@@ -405,6 +549,10 @@
   }
   function save() {
     state = normalizeState(state);
+    account = currentAccount();
+    // language, currency, appearance and Hebrew dates are the same in every profile (also inside other profiles' copies)
+    const shared = pickShared(state.settings);
+    account.profiles.forEach(p => { if (p.id !== activeProfileId) SHARED_KEYS.forEach(k => { if (k in shared) p.data.settings[k] = shared[k]; else delete p.data.settings[k]; }); });
     saveLocal();
     if (!currentUser) return;
     clearTimeout(writeTimer);
@@ -443,14 +591,14 @@
 
   // Big, destructive changes (erase, import, restore, re-rating a month) can be undone right after.
   let undoSnapshot = null;
-  function rememberForUndo() { undoSnapshot = JSON.parse(JSON.stringify(state)); }
+  function rememberForUndo() { undoSnapshot = currentDoc(); }
   function offerUndo(msg) {
     const snapshot = undoSnapshot;
     if (!snapshot) { showToast(msg); return; }
     showToast(msg, {
       label: t('undo'),
       onClick: () => {
-        state = normalizeState(snapshot);
+        setAccount(docToAccount(snapshot));
         save();
         flushRemoteWrite();
         refreshAll();
@@ -477,6 +625,7 @@
   let sheetMode = null;
   let editingId = null;
   let formShift = {};
+  let formProfileId = null; // the profile a new shift goes to (Add Shift's profile row); otherwise the open one
   let formIncome = {};
   let formTemplate = {};
 
@@ -708,13 +857,13 @@
   // Months offered as pills (and stepped through by the calendar swipe): this month, months with shifts,
   // and months with paychecks, so a paycheck stays reachable even if its month's shifts are all deleted.
   function pillMonths() {
-    return Array.from(new Set([currentMonthStr(), ...allMonths(), ...paychecks.map(p => p.month)])).sort().reverse();
+    return Array.from(new Set([currentMonthStr(), ...allMonths(), ...profilePaychecks().map(p => p.month)])).sort().reverse();
   }
   function renderPills(containerId) {
     const months = pillMonths();
     const el = $(containerId);
     const opts = [{ v: 'all', l: t('allTime') }].concat(months.map(m => ({ v: m, l: monthLabel(m) })));
-    const withPay = new Set(paychecks.map(p => p.month));
+    const withPay = new Set(profilePaychecks().map(p => p.month));
     el.innerHTML = opts.map(o => `<button class="pill ${monthFilter === o.v ? 'active' : ''}" data-month="${o.v}">${o.l}${withPay.has(o.v) ? ICON_CLIP : ''}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => {
       btn.addEventListener('click', () => selectMonth(btn.dataset.month));
@@ -749,6 +898,7 @@
     clearTimeout(fitTotalTimer);
     fitTotalTimer = setTimeout(() => fitTotal([money(total)]), 600);
     $('sumSub').textContent = `${t('sumSubWork')} ${money(workPay)} · ${t('sumSubOther')} ${money(otherIncome)}`;
+    renderAllProfilesLine();
     renderCalendar();
     renderBreakdown(shifts, months, totalHours, workPay + otherIncome);
     renderPaychecks();
@@ -848,10 +998,12 @@
     return out.length === 1 ? out + '׳' : out.slice(0, -1) + '״' + out.slice(-1);
   }
   const hebDateFmt = (() => { try { return new Intl.DateTimeFormat('he-u-ca-hebrew', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return null; } })();
-  // Showing Hebrew dates is a per-device display choice: on by default in Hebrew, off in English,
-  // until the user flips the switch in Settings.
+  // Showing Hebrew dates: on by default in Hebrew, off in English, until the switch in Settings is flipped.
+  // That choice is saved on the account (every phone, every profile); an account that never flipped it since
+  // this was added keeps what each phone had chosen before (HEB_DATES_KEY), and nothing is written for it.
   const HEB_DATES_KEY = 'workTrackerHebrewDates';
   function showHebrewDates() {
+    if (typeof state.settings.hebDates === 'boolean') return state.settings.hebDates;
     try { const v = localStorage.getItem(HEB_DATES_KEY); if (v === '1') return true; if (v === '0') return false; } catch (e) {}
     return getLang() === 'he';
   }
@@ -888,6 +1040,7 @@
     const byDate = new Map();
     state.shifts.forEach(x => { if (monthKey(x.date) === month) byDate.set(x.date, (byDate.get(x.date) || []).concat(x)); });
     const today = todayStr();
+    const others = otherProfileDays(month);
     const fullDays = [0, 1, 2, 3, 4, 5, 6].map(d => weekendBands(d, settings).some(([a, z]) => a === 0 && z === 1440));
     let html = '<div class="luach-dow" aria-hidden="true">' + fullDays.map((full, d) => `<span${full ? ' class="shab"' : ''}>${escapeHtml(dowShort(d))}</span>`).join('') + '</div><div class="luach-grid">';
     const lead = first.getDay();
@@ -907,8 +1060,12 @@
         chip = `<span class="luach-hrs${kind}">${shortHours(hours)}</span>`;
         label += ` · ${hrsText(fmt(hours))}`;
       }
+      // other profiles' shifts that day: a ring in each one's colour, no hours (they never count here)
+      const oth = inMonth ? (others.get(ds) || []) : [];
+      if (oth.length) label += ' · ' + oth.map(p => t('calOtherShift').replace('{n}', profileName(p))).join(', ');
+      const rings = oth.length ? `<span class="luach-oth" aria-hidden="true">${oth.map(p => `<i class="pf-${profileColor(p)}"></i>`).join('')}</span>` : '';
       html += `<button type="button" class="luach-day${inMonth ? '' : ' out'}${ds === today ? ' today' : ''}${list.some(x => x.isHoliday) ? ' hol' : ''}" data-date="${ds}"${inMonth ? '' : ' disabled tabindex="-1"'} aria-label="${escapeHtml(label)}">${shade}`
-        + `<span class="luach-d">${d.getDate()}</span>${chip}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
+        + `<span class="luach-d">${d.getDate()}</span>${rings}${chip}${hd ? `<span class="luach-heb" lang="he">${escapeHtml(hd.day)}</span>` : ''}</button>`;
     }
     return html + '</div>';
   }
@@ -946,8 +1103,11 @@
     cal.classList.toggle('with-heb', showHebrewDates());
     const windowText = windowDurationMinutes(settings) === 0 ? t('calNoWeekend')
       : `${t('calLegendWeekend')} · ${dowShort(settings.weekendStartDow)} ${settings.weekendStartTime} – ${dowShort(settings.weekendEndDow)} ${settings.weekendEndTime}`;
+    const othersInMonth = new Map();
+    otherProfileDays(monthFilter).forEach(list => list.forEach(p => othersInMonth.set(p.id, p)));
     legend.innerHTML = `<span><b>8</b>${escapeHtml(t('calLegendHours'))}</span><span><i class="swatch-shab"></i>${escapeHtml(windowText)}</span>`
-      + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`;
+      + `<span><i style="background:var(--red)"></i>${escapeHtml(t('calLegendHoliday'))}</span>`
+      + Array.from(othersInMonth.values()).map(p => `<span><i class="luach-oth-key pf-${profileColor(p)}"></i>${escapeHtml(t('calLegendOther').replace('{n}', profileName(p)))}</span>`).join('');
   }
   // The pill slide plays once; later re-renders of the same month must not replay it.
   $('summaryCalendar').addEventListener('animationend', e => { if (e.animationName === 'calIn') $('summaryCalendar').classList.remove('cal-in'); });
@@ -1118,12 +1278,21 @@
   function renderShifts() {
     renderPills('shiftsMonthPills');
     const shifts = filteredShifts();
-    if (!shifts.length) {
+    // other profiles' shifts in the selected month, as muted lines that switch to that profile on that day
+    const others = monthFilter === 'all' ? [] : otherProfileShifts(monthFilter);
+    if (!shifts.length && !others.length) {
       $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList"><div class="empty-state"><div class="big">${ICON_CLOCK}</div>${t('emptyShifts')}</div></div>`;
       return;
     }
     const overlapping = findOverlaps(state.shifts);
-    const html = shifts.map(s => {
+    const otherRow = ({ p, s }) => `<div class="entry-row-wrap other-wrap"><button type="button" class="other-row" data-switch-prof="${escapeHtml(p.id)}" data-date="${s.date}"
+        aria-label="${escapeHtml(t('otherRowLabel').replace(/\{n\}/g, profileName(p)).replace('{d}', formatDateDisplay(s.date)).replace('{t}', `${s.startTime}–${s.endTime}`))}">
+        ${profAvatar(p, 'sm')}<span class="other-text"><b>${escapeHtml(profileName(p))}</b> · ${escapeHtml(formatDateDisplay(s.date))} · ${s.startTime}–${s.endTime}</span>
+        <span class="other-switch">${escapeHtml(t('otherSwitch'))}${ICON_CHEV_R}</span></button></div>`;
+    // newest first; on a day with both, this profile's shifts come first
+    const items = shifts.map(s => ({ s, key: s.date + '1' + s.startTime })).concat(others.map(o => ({ o, key: o.s.date + '0' + o.s.startTime })))
+      .sort((a, b) => b.key.localeCompare(a.key));
+    const html = items.map(({ s, o }) => o ? otherRow(o) : (() => {
       const c = calcShift(s);
       const dname = formatDateDisplay(s.date);
       const hd = hebrewDate(new Date(s.date + 'T00:00:00'));
@@ -1143,9 +1312,10 @@
           <div class="entry-chevron">${ICON_CHEV_R}</div>
         </div>
       </div>`;
-    }).join('');
+    })()).join('');
     $('shiftsList').outerHTML = `<div class="list-group" id="shiftsList">${html}</div>`;
     attachRowHandlers($('shiftsList'));
+    $('shiftsList').querySelectorAll('[data-switch-prof]').forEach(b => b.addEventListener('click', () => switchToProfileDay(b.dataset.switchProf, b.dataset.date)));
     animateNewRows(shifts);
   }
 
@@ -1159,8 +1329,8 @@
     if (reduceMotion.matches) return;
     let n = 0;
     $('shiftsList').querySelectorAll('.entry-row-wrap').forEach(wrap => {
-      const id = wrap.querySelector('.entry-row').dataset.id;
-      if (!listChanged && before && before.has(id)) return;
+      const row = wrap.querySelector('.entry-row'); // none on another profile's muted line: it only joins a month's cascade
+      if (!row ? !listChanged : !listChanged && before && before.has(row.dataset.id)) return;
       if (listChanged) wrap.style.setProperty('--row-delay', Math.min(n++, 10) * 28 + 'ms');
       wrap.classList.add('row-in');
       wrap.addEventListener('animationend', () => { wrap.classList.remove('row-in'); wrap.style.removeProperty('--row-delay'); }, { once: true });
@@ -1172,6 +1342,7 @@
   function attachRowHandlers(container) {
     container.querySelectorAll('.entry-row-wrap').forEach(wrap => {
       const rowEl = wrap.querySelector('.entry-row');
+      if (!rowEl) return; // another profile's muted line has its own button
       const id = rowEl.dataset.id;
       const kind = rowEl.dataset.kind;
       rowEl.addEventListener('click', () => openShiftSheet(id));
@@ -1183,7 +1354,7 @@
     const months = pillMonths();
     const el = $('goalMonthPills');
     const active = goalMonth();
-    const withPay = new Set(paychecks.map(p => p.month));
+    const withPay = new Set(profilePaychecks().map(p => p.month));
     el.innerHTML = months.map(m => `<button class="pill ${active===m?'active':''}" data-month="${m}">${monthLabel(m)}${withPay.has(m) ? ICON_CLIP : ''}</button>`).join('');
     el.querySelectorAll('.pill').forEach(btn => btn.addEventListener('click', () => selectMonth(btn.dataset.month)));
   }
@@ -1234,9 +1405,11 @@
     if (target<=0) $('goalRemainingLabel').textContent = t('goalSetPrompt');
     else if (achieved>=target) $('goalRemainingLabel').textContent = t('goalReached');
     else $('goalRemainingLabel').textContent = `${fmtVal(target-achieved)} ${t('goalRemaining')}`;
+    renderCombinedGoal();
   }
 
   function renderDataViews() {
+    renderProfileUI();
     renderSummary();
     renderShifts();
     renderGoals();
@@ -1285,7 +1458,9 @@
   }
   ['setCurrency','setRate','setWkPercent','setHolidayPercent','setOtThreshold','setOtPercent'].forEach(id => $(id).addEventListener('change', readSettingsForm));
   $('setHebDates').addEventListener('change', () => {
-    try { localStorage.setItem(HEB_DATES_KEY, $('setHebDates').checked ? '1' : '0'); } catch (e) {}
+    state.settings.hebDates = $('setHebDates').checked;
+    try { localStorage.setItem(HEB_DATES_KEY, state.settings.hebDates ? '1' : '0'); } catch (e) {}
+    save();
     renderDataViews();
   });
 
@@ -1313,7 +1488,8 @@
   }
 
   $('exportBtn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    // the whole account: every profile (for one profile, exactly the same file as before)
+    const blob = new Blob([JSON.stringify(currentDoc(), null, 2)], { type: 'application/json' });
     deliverFile(blob, 'work-tracker-backup-' + todayStr() + '.json');
   });
 
@@ -1334,9 +1510,23 @@
         alert(t('alertImportFail') + t('alertImportInvalid'));
         return;
       }
-      if (!confirm(t('confirmImport'))) return;
+      // A file saved with profiles replaces the whole account. A file from before profiles replaces only the profile
+      // you're in (with one profile that's everything, as it always was); the other profiles and the settings they
+      // share (language, currency, appearance, Hebrew dates) stay as they are.
+      const withProfiles = 'profiles' in data || 'profile' in data || data.v === 2;
+      const onlyThis = !withProfiles && account.profiles.length > 1;
+      if (!confirm(onlyThis ? t('confirmImportProfile').replace('{n}', profileName(activeProfile())) : t('confirmImport'))) return;
       rememberForUndo();
-      state = normalizeState(data);
+      if (withProfiles) {
+        setAccount(docToAccount(data));
+        rememberProfile(activeProfileId);
+      } else if (onlyThis) {
+        const shared = pickShared(state.settings);
+        state = normalizeState(data);
+        SHARED_KEYS.forEach(k => { if (k in shared) state.settings[k] = shared[k]; else delete state.settings[k]; });
+      } else {
+        state = normalizeState(data);
+      }
       save();
       refreshAll();
       offerUndo(t('alertImportOk'));
@@ -1369,8 +1559,11 @@
       if (!matches()) return;
       const language = state.settings.language;
       rememberForUndo();
-      state = defaultState();
-      state.settings.language = language;
+      // every profile goes: back to one empty profile (the account stays marked as using profiles, see firestore.rules)
+      const fresh = defaultState();
+      fresh.settings.language = language;
+      setAccount(Object.assign(docToAccount(fresh), { v: account.v }));
+      rememberProfile(activeProfileId);
       save();
       flushRemoteWrite();
       closeSheetOverlay();
@@ -1443,7 +1636,8 @@
     const today = todayStr();
     const flagKey = 'workTrackerBackup_' + uid;
     try { if (localStorage.getItem(flagKey) === today) return; } catch(e) {}
-    if (!data.shifts.length && !data.additions.length && !data.templates.length) return;
+    const hasData = d => d.shifts.length || d.additions.length || d.templates.length;
+    if (!hasData(data) && !(data.profiles || []).some(hasData)) return;
     const col = backupsRef(uid);
     col.doc(today).get().then(snap => {
       const writes = [];
@@ -1478,12 +1672,13 @@
       }
       const locale = getLang() === 'he' ? 'he-IL' : undefined;
       const labelFor = id => new Date(id + 'T00:00:00').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
-      const entries = kept.map(d => ({ id: d.id, data: normalizeState((d.data() || {}).data) }));
+      const entries = kept.map(d => ({ id: d.id, data: docToAccount((d.data() || {}).data) }));
+      const shiftsIn = acc => acc.profiles.reduce((n, p) => n + p.data.shifts.length, 0);
       $('sheetBody').innerHTML = `
         <div class="section-footer" style="margin:0 4px 12px;">${escapeHtml(t('restoreHint'))}</div>
         <div class="list-group">${entries.map(e => `
           <div class="list-row picker-row" data-backup="${e.id}">
-            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', e.data.shifts.length))}</span></div>
+            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', shiftsIn(e.data)))}</span></div>
             <span class="entry-chevron">${ICON_CHEV_R}</span>
           </div>`).join('')}</div>`;
       $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
@@ -1491,7 +1686,7 @@
         const label = labelFor(entry.id);
         if (!confirm(t('confirmRestore').replace('{d}', label))) return;
         rememberForUndo();
-        state = entry.data;
+        setAccount(entry.data);
         save();
         flushRemoteWrite();
         closeSheetOverlay();
@@ -1510,10 +1705,17 @@
   // PC_CHUNK bytes under users/{uid}/paychecks/{month}-{slot}/chunks/{n}, and its details doc is written
   // in the same batch, so a file is either saved whole or not at all. Limits must match firestore.rules.
   function paychecksRef(uid) { return db.collection('users').doc(uid).collection('paychecks'); }
-  function paychecksFor(month) { return paychecks.filter(p => p.month === month).sort((a, b) => a.slot - b.slot); }
-  function paycheckMonths() { return Array.from(new Set(paychecks.map(p => p.month))).sort(); }
+  // Each profile has its own files. The first profile's are named {month}-{slot} as always (no `profile` field);
+  // every other profile's are {profileId}_{month}-{slot} and carry its id in `profile` (see firestore.rules).
+  function paycheckProfile(p) { return p.profile || MAIN_PROFILE; }
+  function pcIdPrefix(pid) { return pid === MAIN_PROFILE ? '' : pid + '_'; }
+  function profilePaychecks(pid = activeProfileId) { return paychecks.filter(p => paycheckProfile(p) === pid); }
+  function paychecksFor(month, pid = activeProfileId) { return profilePaychecks(pid).filter(p => p.month === month).sort((a, b) => a.slot - b.slot); }
+  function paycheckMonths() { return Array.from(new Set(profilePaychecks().map(p => p.month))).sort(); }
+  function pcSavingKey(month, pid = activeProfileId) { return pid + '|' + month; }
   function formatBytes(n) { return n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
-  function pcDismissKey() { return 'workTrackerPaycheckDismissed_' + (currentUser ? currentUser.uid : ''); }
+  // "Not now" is remembered per profile; the first profile keeps the key it always had.
+  function pcDismissKey(pid = activeProfileId) { return 'workTrackerPaycheckDismissed_' + (currentUser ? currentUser.uid : '') + (pid === MAIN_PROFILE ? '' : '_' + pid); }
 
   function startPaycheckSync(user) {
     stopPaycheckSync();
@@ -1595,22 +1797,23 @@
   // Which of the month's 3 slots is free: 1-3, 0 = month full, -1 = can't tell. Asked of the server, so it is
   // right even before this device's list has loaded (just after signing in on a new phone) and if another
   // device added a file meanwhile. If the server can't be reached in time, the list on this device is used.
-  async function freePaycheckSlot(uid, month) {
-    const lookup = Promise.all([1, 2, 3].map(n => paychecksRef(uid).doc(`${month}-${n}`).get({ source: 'server' })))
+  async function freePaycheckSlot(uid, month, pid) {
+    const lookup = Promise.all([1, 2, 3].map(n => paychecksRef(uid).doc(`${pcIdPrefix(pid)}${month}-${n}`).get({ source: 'server' })))
       .then(snaps => { const i = snaps.findIndex(x => !x.exists); return i < 0 ? 0 : i + 1; });
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), PC_SLOT_WAIT_MS));
     try { return await Promise.race([lookup, timeout]); }
     catch (err) {
       console.warn('Paycheck slot check failed:', err && (err.code || err.message));
       if (!paychecksLoaded) return -1;
-      const taken = paychecksFor(month).map(p => p.slot);
+      const taken = paychecksFor(month, pid).map(p => p.slot);
       return [1, 2, 3].find(x => !taken.includes(x)) || 0;
     }
   }
 
   async function uploadPaycheck(month, file) {
     if (!currentUser) return;
-    if (paychecksLoaded && paychecksFor(month).length >= PC_MAX_FILES) { showToast(t('pcFull')); return; }
+    const pid = activeProfileId; // the file belongs to the profile open when it was picked, even if the user switches meanwhile
+    if (paychecksLoaded && paychecksFor(month, pid).length >= PC_MAX_FILES) { showToast(t('pcFull')); return; }
     if (navigator.onLine === false) { showToast(t('pcOffline')); return; }
     let prepared;
     try { prepared = await preparePaycheckFile(file); }
@@ -1619,23 +1822,26 @@
     const chunks = Math.ceil(bytes.length / PC_CHUNK);
     if (chunks > PC_MAX_CHUNKS) { showToast(t('pcTooBig')); return; }
     const uid = currentUser.uid;
-    pcSaving.add(month);
+    const savingKey = pcSavingKey(month, pid);
+    pcSaving.add(savingKey);
     renderPaychecks();
-    const finish = key => { showToast(t(key)); pcSaving.delete(month); renderPaychecks(); };
+    const finish = key => { showToast(t(key)); pcSaving.delete(savingKey); renderPaychecks(); };
     const began = Date.now(); // the slot check and the save share one time limit (PC_SAVE_WAIT_MS)
     // Two tries: if another device took the free slot between the check and the save (the server refuses
     // writing over an existing file), the slots are checked again once.
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const slot = await freePaycheckSlot(uid, month);
+      const slot = await freePaycheckSlot(uid, month, pid);
       if (slot === 0) return finish('pcFull');
       if (slot < 0) return finish('pcUploadFailed');
-      const ref = paychecksRef(uid).doc(`${month}-${slot}`);
+      const ref = paychecksRef(uid).doc(`${pcIdPrefix(pid)}${month}-${slot}`);
       const batch = db.batch();
       for (let i = 0; i < chunks; i++) {
         batch.set(ref.collection('chunks').doc(String(i)), { d: firebase.firestore.Blob.fromUint8Array(bytes.subarray(i * PC_CHUNK, (i + 1) * PC_CHUNK)) });
       }
       // the details doc is part of the same batch, so it only exists once every piece is saved
-      batch.set(ref, { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      const details = { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
+      if (pid !== MAIN_PROFILE) details.profile = pid;
+      batch.set(ref, details);
       // A connection that looks online but can't reach the server would keep "Saving…" spinning forever, so the
       // wait is capped. The save itself can't be cancelled; it keeps going and finishes when the connection does.
       let gaveUp = false;
@@ -1680,9 +1886,17 @@
   }
 
   // File name used when saving: "Paycheck 2026-10.pdf", a second one that month "Paycheck 2026-10 (2).jpg".
+  // With more than one profile the job's name is added: "Paycheck Hotel 2026-10.pdf".
   function paycheckFileName(p) {
-    const n = paychecksFor(p.month).findIndex(x => x.id === p.id) + 1;
-    return `Paycheck ${p.month}${n > 1 ? ` (${n})` : ''}.${PC_TYPES[p.type]}`;
+    const n = paychecksFor(p.month, paycheckProfile(p)).findIndex(x => x.id === p.id) + 1;
+    return `Paycheck ${jobFilePart(paycheckProfile(p))}${p.month}${n > 1 ? ` (${n})` : ''}.${PC_TYPES[p.type]}`;
+  }
+  // "Hotel " for file names when the account has several profiles (characters files can't hold are dropped).
+  function jobFilePart(pid = activeProfileId) {
+    const p = account.profiles.find(x => x.id === pid);
+    if (!p || account.profiles.length < 2) return '';
+    const name = profileName(p).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim();
+    return name ? name + ' ' : '';
   }
 
   // ---- Summary: the selected month's paycheck files, and the reminder ----
@@ -1699,7 +1913,7 @@
         <span class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></span>
         <span class="entry-chevron">${ICON_CHEV_R}</span>
       </button>`).join('');
-    if (pcSaving.has(monthFilter)) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
+    if (pcSaving.has(pcSavingKey(monthFilter))) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
     else if (files.length < PC_MAX_FILES) html += `<button type="button" class="list-row pc-row pc-add" id="paycheckAddBtn"><span class="pc-ico">${ICON_PLUS}</span><span class="rlabel">${escapeHtml(t(files.length ? 'pcAttachMore' : 'pcAttach'))}</span></button>`;
     $('paycheckList').innerHTML = html;
     $('paycheckList').querySelectorAll('[data-pc]').forEach(row => row.addEventListener('click', () => {
@@ -1724,19 +1938,19 @@
   // Every past month of the last PC_REMIND_MONTHS that has shifts but no paycheck is listed on Summary
   // (last month only from the 10th). "Not now" hides the months shown until another one goes missing.
   const PC_REMIND_MONTHS = 12;
-  function pcDismissedMonths() {
+  function pcDismissedMonths(pid = activeProfileId) {
     let raw = '';
-    try { raw = localStorage.getItem(pcDismissKey()) || ''; } catch (e) {}
+    try { raw = localStorage.getItem(pcDismissKey(pid)) || ''; } catch (e) {}
     if (isValidMonth(raw)) return [raw]; // saved by the version that reminded about one month only
     try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter(isValidMonth) : []; } catch (e) { return []; }
   }
-  function missingPaycheckMonths() {
-    const d = new Date(), dismissed = new Set(pcDismissedMonths()), out = [];
+  function missingPaycheckMonths(pid = activeProfileId) {
+    const d = new Date(), dismissed = new Set(pcDismissedMonths(pid)), shifts = profileDataById(pid).shifts, out = [];
     for (let k = PC_REMIND_MONTHS; k >= 1; k--) {
       if (k === 1 && d.getDate() < PC_REMIND_DAY) continue;
       const m = new Date(d.getFullYear(), d.getMonth() - k, 1);
       const month = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`;
-      if (!dismissed.has(month) && state.shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month).length && !pcSaving.has(month)) out.push(month);
+      if (!dismissed.has(month) && shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month, pid).length && !pcSaving.has(pcSavingKey(month, pid))) out.push(month);
     }
     return out; // oldest first
   }
@@ -1940,7 +2154,7 @@
     const range = () => {
       let a = $('pcDlFrom').value, b = $('pcDlTo').value;
       if (a > b) [a, b] = [b, a];
-      return paychecks.filter(p => p.month >= a && p.month <= b).sort((x, y) => x.month.localeCompare(y.month) || x.slot - y.slot);
+      return profilePaychecks().filter(p => p.month >= a && p.month <= b).sort((x, y) => x.month.localeCompare(y.month) || x.slot - y.slot);
     };
     const update = () => { const n = range().length; $('pcDlCount').textContent = n === 1 ? t('pcDlOne') : t('pcDlCount').replace('{n}', n); };
     $('pcDlFrom').addEventListener('change', update);
@@ -1962,7 +2176,7 @@
         if (files.length === 1) { closeSheetOverlay(); deliverFile(blobs[0], paycheckFileName(files[0])); return; }
         const entries = await Promise.all(files.map(async (p, i) => ({ name: paycheckFileName(p), content: new Uint8Array(await blobs[i].arrayBuffer()) })));
         closeSheetOverlay();
-        deliverFile(buildZip(entries, 'application/zip'), a === b ? `Paychecks ${a}.zip` : `Paychecks ${a} to ${b}.zip`);
+        deliverFile(buildZip(entries, 'application/zip'), a === b ? `Paychecks ${jobFilePart()}${a}.zip` : `Paychecks ${jobFilePart()}${a} to ${b}.zip`);
       } catch (err) {
         console.error('Paycheck download failed:', err);
         showToast(t('pcDlFailed'));
@@ -2175,6 +2389,7 @@
       });
     }
     const meta = [];
+    if (account.profiles.length > 1 || activeProfile().name) meta.push({ text: `${t('reportJob')}: ${profileName(activeProfile())}` });
     if (currentUser && currentUser.email) meta.push({ text: `${t('reportEmployee')}: ${currentUser.email}` });
     meta.push({ text: `${t('reportGenerated')}: ${new Date().toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })}`, muted: true });
     return {
@@ -2453,11 +2668,13 @@
       return;
     }
     closeSheetOverlay();
-    deliverFile(blob, `Shift-Report-${month}.${format === 'pdf' ? 'pdf' : 'docx'}`);
+    const job = jobFilePart().trim().replace(/\s+/g, '-');
+    deliverFile(blob, `Shift-Report-${job ? job + '-' : ''}${month}.${format === 'pdf' ? 'pdf' : 'docx'}`);
   }
   $('reportBtn').addEventListener('click', openReportSheet);
 
   function refreshAll() {
+    syncTheme();
     loadSettingsForm();
     loadGoalForm();
     resyncSettingsWheels();
@@ -2834,19 +3051,29 @@
     try { localStorage.setItem(MONEY_HIDDEN_KEY, hidden ? '1' : '0'); } catch (e) {}
   });
 
-  // ---- appearance: Auto (follow the phone), Light or Dark, remembered on this device ----
+  // ---- appearance: Auto (follow the phone), Light or Dark ----
+  // Saved on the account once chosen (every phone, every profile). Each phone keeps a copy (THEME_KEY) so the
+  // app and the sign-in screen open in the right colours before anything loads (money.boot.js). An account
+  // that hasn't chosen since this was added keeps each phone's own earlier choice, and nothing is written for it.
   const THEME_KEY = 'workTrackerTheme';
   function currentTheme() { try { const v = localStorage.getItem(THEME_KEY); return v === 'light' || v === 'dark' ? v : 'auto'; } catch (e) { return 'auto'; } }
+  function themeChoice() { const v = state.settings.theme; return v === 'auto' || v === 'light' || v === 'dark' ? v : currentTheme(); }
+  function syncTheme() {
+    const choice = themeChoice();
+    if ('theme' in state.settings) { try { localStorage.setItem(THEME_KEY, choice); } catch (e) {} }
+    applyTheme(choice);
+  }
   function applyTheme(choice) {
     if (choice === 'light' || choice === 'dark') document.documentElement.setAttribute('data-theme', choice);
     else document.documentElement.removeAttribute('data-theme');
     $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.themeChoice === choice));
   }
   $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
-    try { localStorage.setItem(THEME_KEY, b.dataset.themeChoice); } catch (e) {}
-    applyTheme(b.dataset.themeChoice);
+    state.settings.theme = b.dataset.themeChoice;
+    save();
+    syncTheme();
   }));
-  applyTheme(currentTheme());
+  syncTheme();
 
   // ---- language ----
   function applyLanguage() {
@@ -2875,25 +3102,27 @@
   function renderShiftTemplateChips() {
     const container = $('templateChips');
     if (!container) return;
-    if (!state.templates.length) {
+    const templates = profileDataById(formProfileId || activeProfileId).templates;
+    if (!templates.length) {
       container.innerHTML = `<div class="tpl-empty-hint">${t('noTemplatesHint')}</div>`;
       return;
     }
-    container.innerHTML = state.templates.map(tpl => `
+    container.innerHTML = templates.map(tpl => `
       <button class="tpl-chip-select" data-apply="${escapeHtml(tpl.id)}">
         <span class="tpl-name">${escapeHtml(tpl.name)}</span>
         <span class="tpl-time">${tpl.startTime}–${tpl.endTime}</span>
       </button>`).join('');
     container.querySelectorAll('[data-apply]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const tpl = state.templates.find(x => x.id === btn.dataset.apply);
+        const tpl = templates.find(x => x.id === btn.dataset.apply);
         if (!tpl) return;
         formShift.startTime = tpl.startTime;
         formShift.endTime = tpl.endTime;
         $('valShiftStart').textContent = tpl.startTime;
         $('valShiftEnd').textContent = tpl.endTime;
-        initTimePicker($('panelShiftStart'), tpl.startTime, v => { formShift.startTime=v; $('valShiftStart').textContent=v; });
-        initTimePicker($('panelShiftEnd'), tpl.endTime, v => { formShift.endTime=v; $('valShiftEnd').textContent=v; });
+        initTimePicker($('panelShiftStart'), tpl.startTime, v => { formShift.startTime=v; $('valShiftStart').textContent=v; updateShiftClash(); });
+        initTimePicker($('panelShiftEnd'), tpl.endTime, v => { formShift.endTime=v; $('valShiftEnd').textContent=v; updateShiftClash(); });
+        updateShiftClash();
       });
     });
   }
@@ -3088,6 +3317,7 @@
   // ---- add/edit shift sheet ----
   function openShiftSheet(id, presetDate) {
     sheetMode = 'shift'; editingId = id;
+    formProfileId = activeProfileId;
     $('sheetSave').style.visibility = '';
     const shift = id ? state.shifts.find(s => s.id === id) : null;
     const defaultStart = nowTimeStr();
@@ -3098,7 +3328,12 @@
       rateId: shift ? shift.rateId : null
     };
     $('sheetTitle').textContent = shift ? t('sheetEditShift') : t('sheetNewShift');
-    $('sheetBody').innerHTML = `
+    // a new shift can go to any profile without switching (its templates and rates follow the choice)
+    const profileRow = !shift && account.profiles.length > 1 ? `<div class="field-group">
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('fieldProfile'))}</div>
+        <div class="prof-chips" role="radiogroup" aria-label="${escapeHtml(t('fieldProfile'))}">${account.profiles.map(p => `<button type="button" class="prof-chip" role="radio" data-prof="${escapeHtml(p.id)}" aria-checked="${p.id === formProfileId}">${profAvatar(p, 'sm')}<span>${escapeHtml(profileName(p))}</span></button>`).join('')}</div>
+      </div>` : '';
+    $('sheetBody').innerHTML = `${profileRow}
       <div class="field-group">
         <div class="list-group">
           <div class="list-row picker-row" data-toggle="panelShiftDate"><div class="rlabel" data-i18n="fieldDate">Date</div><div><span class="picker-value" id="valShiftDate"></span><span class="chev">${ICON_CHEV_D}</span></div></div>
@@ -3137,6 +3372,7 @@
           <div class="wheel-highlight"></div>
           <div class="wheel-fade-bottom"></div>
         </div>
+        <div class="clash-warn hidden" id="fClash" role="status"></div>
       </div>
       <div class="field-group">
         <div class="list-group">
@@ -3174,19 +3410,27 @@
       ${shift ? `<button class="btn-danger btn-block" id="fDelete" data-i18n="deleteShiftBtn">Delete Shift</button>` : ''}
     `;
     applyStaticTranslations();
-    initDatePicker($('panelShiftDate'), formShift.date, v => { formShift.date = v; $('valShiftDate').textContent = formatDateDisplay(v); });
-    initTimePicker($('panelShiftStart'), formShift.startTime, v => { formShift.startTime = v; $('valShiftStart').textContent = v; });
-    initTimePicker($('panelShiftEnd'), formShift.endTime, v => { formShift.endTime = v; $('valShiftEnd').textContent = v; });
+    initDatePicker($('panelShiftDate'), formShift.date, v => { formShift.date = v; $('valShiftDate').textContent = formatDateDisplay(v); updateShiftClash(); });
+    initTimePicker($('panelShiftStart'), formShift.startTime, v => { formShift.startTime = v; $('valShiftStart').textContent = v; updateShiftClash(); });
+    initTimePicker($('panelShiftEnd'), formShift.endTime, v => { formShift.endTime = v; $('valShiftEnd').textContent = v; updateShiftClash(); });
     renderShiftTemplateChips();
     setupPickerToggles($('sheetBody'));
     // New shifts always use today's rates; an existing shift keeps its own unless the user switches it.
-    const showRates = () => {
+    const showRates = () => inProfile(account.profiles.find(p => p.id === formProfileId) || activeProfile(), () => {
       const stored = formShift.rateId && state.rateSets.find(x => x.id === formShift.rateId);
       const r = stored || currentRates();
       $('valShiftRates').textContent = rateSummary(r);
       $('fUseCurrentRates').classList.toggle('hidden', !stored || rateKey(stored) === rateKey(currentRates()));
-    };
+    });
     showRates();
+    updateShiftClash();
+    $('sheetBody').querySelectorAll('.prof-chip').forEach(b => b.addEventListener('click', () => {
+      formProfileId = b.dataset.prof;
+      $('sheetBody').querySelectorAll('.prof-chip').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+      renderShiftTemplateChips();
+      showRates();
+      updateShiftClash();
+    }));
     $('fUseCurrentRates').addEventListener('click', () => { formShift.rateId = null; showRates(); });
     $('fCustomPayOn').addEventListener('change', () => {
       const on = $('fCustomPayOn').checked;
@@ -3361,14 +3605,16 @@
     const times = weekDayTimes(d);
     const same = !!times && times.start === times.end;
     const clash = !!times && !!findClash({ date: d.date, startTime: times.start, endTime: times.end }, null);
+    const other = times ? findOtherClash({ date: d.date, startTime: times.start, endTime: times.end }, activeProfileId, null) : null;
     const parts = [];
     if (existing.length) parts.push(t('weekExisting').replace('{s}', existing.map(s => `${s.startTime}–${s.endTime}`).join(', ')));
     if (same) parts.push(t('week24h'));
     if (clash) parts.push(t('weekClash'));
+    if (other) parts.push(t('weekClashOther').replace('{n}', profileName(other.p)).replace('{t}', `${other.s.startTime}–${other.s.endTime}`));
     const el = $('weekExisting' + i);
     el.textContent = parts.join(' · ');
     el.classList.toggle('hidden', !parts.length);
-    el.classList.toggle('clash', clash);
+    el.classList.toggle('clash', clash || !!other);
     updateWeekSaveBtn();
   }
 
@@ -3386,7 +3632,7 @@
   function saveWeekPlan() {
     const picks = weekPicks();
     if (!picks.length) return;
-    if (state.shifts.length + picks.length > LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+    if (totalShiftCount() + picks.length > LIMITS.shifts) { alert(t('alertLimitReached')); return; }
     const candidates = picks.map(x => ({ id: genId(), date: x.d.date, startTime: x.times.start, endTime: x.times.end, isHoliday: x.d.holiday, note: '' }));
     // Overlaps with shifts already logged, and between the new shifts themselves (e.g. an overnight shift into the next day).
     const flagged = findOverlaps(candidates);
@@ -3405,16 +3651,32 @@
   }
 
   $('sheetSave').addEventListener('click', () => {
+    if (sheetMode === 'profileEdit') { saveProfileEdit(); return; }
+    let savedAgain = false;
     if (sheetMode === 'shift') {
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
       if (formShift.startTime === formShift.endTime && !confirm(t('confirm24h'))) return;
-      if (!editingId && state.shifts.length >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+      if (!editingId && totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
       let customPay = null;
       if ($('fCustomPayOn').checked) {
         const raw = $('fCustomPay').value.trim();
         const v = parseFloat(raw);
         if (raw === '' || !isValidCustomPay(v)) { alert(t('alertCustomPay')); return; }
         customPay = Math.round(v * 100) / 100;
+      }
+      // a new shift saved into another profile (Add Shift's profile row): its own overlap check, rates and list
+      const target = !editingId && formProfileId && formProfileId !== activeProfileId ? account.profiles.find(p => p.id === formProfileId) : null;
+      if (target) {
+        const own = inProfile(target, () => findClash(formShift, null));
+        if (own && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(own.date)).replace('{t}', `${own.startTime}–${own.endTime}`))) return;
+        const shiftObj = { id: genId(), date: formShift.date, startTime: formShift.startTime, endTime: formShift.endTime, isHoliday: $('fHoliday').checked, note: $('fNote').value.trim().slice(0, LIMITS.note) };
+        if (customPay !== null) shiftObj.customPay = customPay;
+        inProfile(target, () => { shiftObj.rateId = ensureCurrentRateSet(); state.shifts.push(shiftObj); });
+        save();
+        closeSheetOverlay();
+        renderDataViews();
+        showToast(t('savedToProfile').replace('{n}', profileName(target)), { label: t('otherSwitch'), onClick: () => switchToProfileDay(target.id, shiftObj.date) });
+        return;
       }
       const clash = findClash(formShift, editingId);
       if (clash && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(clash.date)).replace('{t}', `${clash.startTime}–${clash.endTime}`))) return;
@@ -3430,6 +3692,12 @@
       if (editingId) {
         const idx = state.shifts.findIndex(s => s.id === editingId);
         if (idx !== -1) state.shifts[idx] = shiftObj;
+        else {
+          // deleted on another device while this sheet was open: the edit wins and the shift is kept
+          if (totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+          state.shifts.push(shiftObj);
+          savedAgain = true;
+        }
       } else {
         state.shifts.push(shiftObj);
       }
@@ -3473,11 +3741,12 @@
       if (!name) { alert(t('alertFillTemplateName')); return; }
       if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
       const tplObj = { id: editingId || genId(), name, startTime: formTemplate.startTime, endTime: formTemplate.endTime };
-      if (editingId) {
-        const idx = state.templates.findIndex(x => x.id === editingId);
-        if (idx !== -1) state.templates[idx] = tplObj;
-      } else {
+      const tplIdx = editingId ? state.templates.findIndex(x => x.id === editingId) : -1;
+      if (tplIdx !== -1) state.templates[tplIdx] = tplObj;
+      else {
+        if (editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
         state.templates.push(tplObj);
+        if (editingId) showToast(t('savedAgain'));
       }
       save();
       closeSheetOverlay();
@@ -3487,6 +3756,7 @@
     save();
     closeSheetOverlay();
     renderDataViews();
+    if (savedAgain) showToast(t('savedAgain'));
   });
 
   // ---- auth ----
@@ -3787,9 +4057,10 @@
   $('deleteAccountBtn').addEventListener('click', openDeleteAccountSheet);
 
   function applyRemoteState(incoming) {
-    setBase(incoming);
-    const same = JSON.stringify(incoming) === JSON.stringify(state);
-    if (!same) state = incoming;
+    const doc = accountToDoc(incoming);
+    setBase(doc);
+    const same = JSON.stringify(doc) === JSON.stringify(currentDoc());
+    if (!same) setAccount(incoming);
     saveLocal();
     if (!same) refreshAll();
   }
@@ -3843,6 +4114,469 @@
     hideSplash();
   }
 
+  // ---- profiles: the button at the top of every tab, the switcher, adding, editing and deleting ----
+  const ICON_TICK = '<svg class="prof-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  const COLOR_LABELS = { teal: 'colorTeal', violet: 'colorViolet', gold: 'colorGold', rose: 'colorRose', slate: 'colorSlate' };
+  function activeProfile() { return account.profiles.find(p => p.id === activeProfileId) || account.profiles[0]; }
+  function profileName(p) { return p.name || t('profileDefaultName'); }
+  function profileColor(p) { return p.color || PROFILE_COLORS[0]; }
+  function profAvatar(p, cls) {
+    const initial = (Array.from(profileName(p).trim())[0] || '?').toLocaleUpperCase();
+    return `<span class="prof-av pf-${profileColor(p)}${cls ? ' ' + cls : ''}" aria-hidden="true">${escapeHtml(initial)}</span>`;
+  }
+  function nameTaken(name, exceptId) {
+    const n = name.toLocaleLowerCase();
+    return account.profiles.some(p => p.id !== exceptId && profileName(p).toLocaleLowerCase() === n);
+  }
+  // Runs fn with `state` briefly set to another profile's data, so its numbers come from the same pay code.
+  function inProfile(p, fn) {
+    if (p.id === activeProfileId) return fn();
+    const keep = state;
+    state = p.data;
+    try { return fn(); } finally { state = keep; }
+  }
+  // A profile's hours and pay (with its monthly additions) in a month.
+  function profileMonthStats(p, month) {
+    return inProfile(p, () => {
+      let hours = 0, pay = 0;
+      state.shifts.forEach(s => { if (monthKey(s.date) === month) { const c = calcShift(s); hours += c.exactHours; pay += c.pay; } });
+      return { hours, pay: pay + additionsTotal(month) };
+    });
+  }
+  function profileMonthTotal(p, month) { return profileMonthStats(p, month).pay; }
+
+  // The optional goal for all profiles together (Goals tab, 2+ profiles): their hours or pay added up.
+  function renderCombinedGoal() {
+    const multi = account.profiles.length > 1, c = account.combined;
+    $('combinedGoalWrap').classList.toggle('hidden', !multi);
+    if (!multi) return;
+    $('combinedGoalOn').checked = !!c;
+    $('combinedGoalBody').classList.toggle('hidden', !c);
+    if (!c) return;
+    const type = c.goalType === 'income' ? 'income' : 'hours', key = type === 'income' ? 'goalIncome' : 'goalHours';
+    $('combinedGoalType').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.goaltype === type));
+    if (document.activeElement !== $('combinedGoalTarget')) $('combinedGoalTarget').value = c[key] || '';
+    const g = combinedGoalNumbers(goalMonth());
+    $('combinedGoalAch').textContent = g.ach;
+    $('combinedGoalPct').textContent = g.pctText;
+    $('combinedGoalRem').textContent = g.rem;
+    const bar = $('combinedGoalBar');
+    bar.style.transform = `scaleX(${g.pct})`;
+    bar.classList.toggle('done', g.reached);
+  }
+  function setCombined(change) {
+    account = currentAccount();
+    account.combined = change ? Object.assign({ on: true, goalType: 'hours', goalHours: 0, goalIncome: 0 }, account.combined, change) : null;
+    save();
+    renderCombinedGoal();
+  }
+  $('combinedGoalOn').addEventListener('change', () => setCombined($('combinedGoalOn').checked ? { goalType: state.settings.goalType === 'income' ? 'income' : 'hours' } : null));
+  $('combinedGoalType').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => setCombined({ goalType: b.dataset.goaltype })));
+  $('combinedGoalTarget').addEventListener('change', () => {
+    const c = account.combined;
+    if (!c) return;
+    const type = c.goalType === 'income' ? 'income' : 'hours', key = type === 'income' ? 'goalIncome' : 'goalHours';
+    const raw = $('combinedGoalTarget').value.trim(), n = parseFloat(raw);
+    if (raw === '') setCombined({ [key]: 0 });
+    else if (Number.isFinite(n) && n >= 0 && n <= GOAL_MAX[type]) setCombined({ [key]: n });
+    else { showToast(t('settingsInvalidKept')); $('combinedGoalTarget').value = c[key] || ''; }
+  });
+  // A profile with past months that have shifts but no paycheck (the same months its own Summary reminds about).
+  function profileMissesPaycheck(pid) { return !!currentUser && paychecksLoaded && missingPaycheckMonths(pid).length > 0; }
+  function renderProfileUI() {
+    const p = activeProfile(), name = profileName(p);
+    const dot = account.profiles.some(x => x.id !== p.id && profileMissesPaycheck(x.id));
+    document.querySelectorAll('[data-prof-btn]').forEach(b => {
+      b.innerHTML = `${profAvatar(p)}<span class="prof-name">${escapeHtml(name)}</span>${ICON_CHEV_D}${dot ? '<span class="prof-dot" aria-hidden="true"></span>' : ''}`;
+      b.setAttribute('aria-label', t('profileBtnLabel').replace('{n}', name) + (dot ? '. ' + t('profileDotLabel') : ''));
+    });
+    $('profSection').innerHTML = `${profAvatar(p, 'sm')}<span class="prof-label">${escapeHtml(t('profileSection').replace('{n}', name))}</span>`;
+    $('profEditValue').textContent = name;
+    $('profAddRow').classList.toggle('hidden', account.profiles.length >= PROFILE_MAX);
+  }
+
+  // Opening a profile. `state` becomes its data; everything on screen is drawn again for it.
+  function activateProfile(id) {
+    account = currentAccount();
+    const shared = pickShared(state.settings);
+    const p = account.profiles.find(x => x.id === id) || account.profiles[0];
+    activeProfileId = p.id;
+    state = p.data;
+    // language, currency, appearance and Hebrew dates are the same in every profile: the copy kept with a
+    // profile that wasn't open can be older than what was just changed
+    SHARED_KEYS.forEach(k => { if (k in shared) state.settings[k] = shared[k]; else delete state.settings[k]; });
+    rememberProfile(p.id);
+    ratesListExpanded = false;
+  }
+  // The switch: the page fades out, a wash of the new profile's colour comes up, the new profile fades in
+  // (about a third of a second). With Reduce Motion it's a plain fade (the wash is hidden by the CSS).
+  let profSwitchTimer = null;
+  function playProfileSwitch(p, swap, after) {
+    const content = $('content'), wash = $('profWash');
+    clearTimeout(profSwitchTimer);
+    wash.className = 'prof-wash pf-' + profileColor(p);
+    void wash.offsetWidth;
+    wash.classList.add('on');
+    content.classList.remove('prof-in');
+    content.classList.add('prof-out');
+    profSwitchTimer = setTimeout(() => {
+      swap();
+      content.scrollTop = 0;
+      if (after) after();
+      content.classList.add('prof-in');
+      content.classList.remove('prof-out');
+      wash.classList.replace('on', 'off');
+      profSwitchTimer = setTimeout(() => { content.classList.remove('prof-in'); wash.className = 'prof-wash'; }, 320);
+    }, 130);
+  }
+  function switchProfile(id, after) {
+    const p = account.profiles.find(x => x.id === id);
+    if (sheetMode === 'profiles' || sheetMode === 'allProfiles') closeSheetOverlay();
+    if (!p) return;
+    if (id === activeProfileId) { if (after) after(); return; }
+    playProfileSwitch(p, () => { activateProfile(id); refreshAll(); }, after);
+  }
+  // "Switch ›" on another profile's shift: that profile opens on the Shifts list at that day.
+  function switchToProfileDay(id, date) {
+    switchProfile(id, () => {
+      if (monthFilter !== 'all' && monthFilter !== monthKey(date)) selectMonth(monthKey(date));
+      showShiftsInList(state.shifts.filter(x => x.date === date).sort((a, b) => a.startTime.localeCompare(b.startTime)).map(x => x.id));
+    });
+  }
+
+  // ---- other profiles' shifts, seen from the open profile (never counted in it) ----
+  // date -> the other profiles with a shift starting that day
+  function otherProfileDays(month) {
+    const out = new Map();
+    if (account.profiles.length < 2 || !isValidMonth(month)) return out;
+    account.profiles.forEach(p => {
+      if (p.id === activeProfileId) return;
+      profileDataById(p.id).shifts.forEach(s => {
+        if (monthKey(s.date) !== month) return;
+        const list = out.get(s.date) || [];
+        if (!list.includes(p)) list.push(p);
+        out.set(s.date, list);
+      });
+    });
+    return out;
+  }
+  function otherProfileShifts(month) {
+    const out = [];
+    account.profiles.forEach(p => { if (p.id !== activeProfileId) profileDataById(p.id).shifts.forEach(s => { if (monthKey(s.date) === month) out.push({ p, s }); }); });
+    return out;
+  }
+  // The first shift in another profile (not `pid`) that overlaps this one, as { p, s }.
+  function findOtherClash(shift, pid, ignoreId) {
+    if (account.profiles.length < 2) return null;
+    const r = shiftRange(shift);
+    for (const p of account.profiles) {
+      if (p.id === pid) continue;
+      const s = profileDataById(p.id).shifts.find(o => o.id !== ignoreId && rangesOverlap(r, shiftRange(o)));
+      if (s) return { p, s };
+    }
+    return null;
+  }
+  const ICON_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4.5M12 17.6v.1"/></svg>';
+  // The warning in Add Shift / Edit Shift when the times overlap a shift in another profile (saving is still allowed).
+  function updateShiftClash() {
+    const el = $('fClash');
+    if (!el || sheetMode !== 'shift') return;
+    const ok = isValidDate(formShift.date) && isValidTime(formShift.startTime) && isValidTime(formShift.endTime);
+    const hit = ok ? findOtherClash(formShift, formProfileId || activeProfileId, editingId) : null;
+    el.classList.toggle('hidden', !hit);
+    if (!hit) { el.innerHTML = ''; return; }
+    el.innerHTML = `${ICON_WARN}<span>${escapeHtml(t('clashOther').replace('{n}', profileName(hit.p)).replace('{d}', formatDateDisplay(hit.s.date)).replace('{t}', `${hit.s.startTime}–${hit.s.endTime}`))}<small>${escapeHtml(t('clashOtherSub'))}</small></span>`;
+  }
+
+  // ---- all profiles together: the line under the total and its summary ----
+  // A profile's hours and pay for a month, or for all time ('all').
+  function profilePeriodStats(p, period) {
+    if (period !== 'all') return profileMonthStats(p, period);
+    return inProfile(p, () => {
+      let hours = 0, pay = 0;
+      state.shifts.forEach(s => { const c = calcShift(s); hours += c.exactHours; pay += c.pay; });
+      return { hours, pay: pay + allMonths().reduce((sum, m) => sum + additionsTotal(m), 0) };
+    });
+  }
+  function allProfilesLabel(period) {
+    return period === 'all' ? t('allLineAll') : period === currentMonthStr() ? t('profileAllMonth') : t('allLineMonth').replace('{m}', monthLongLabel(period));
+  }
+  function renderAllProfilesLine() {
+    const el = $('allProfilesLine'), list = account.profiles;
+    el.classList.toggle('hidden', list.length < 2);
+    if (list.length < 2) { el.innerHTML = ''; return; }
+    const total = list.reduce((sum, p) => sum + profilePeriodStats(p, monthFilter).pay, 0);
+    el.innerHTML = `<span class="prof-stack">${list.map(p => profAvatar(p)).join('')}</span><span class="all-label">${escapeHtml(allProfilesLabel(monthFilter))}</span><span class="all-amt money-private">${escapeHtml(money(total))}</span><span class="all-chev">${ICON_CHEV_R}</span>`;
+  }
+  $('allProfilesLine').addEventListener('click', () => openAllProfilesSheet(monthFilter));
+  // The numbers of the goal for all profiles in a month (null when it's off).
+  function combinedGoalNumbers(month) {
+    const c = account.combined;
+    if (!c) return null;
+    const type = c.goalType === 'income' ? 'income' : 'hours', target = c[type === 'income' ? 'goalIncome' : 'goalHours'] || 0;
+    const sum = account.profiles.reduce((a, p) => { const s = profileMonthStats(p, month); return { hours: a.hours + s.hours, pay: a.pay + s.pay }; }, { hours: 0, pay: 0 });
+    const achieved = type === 'hours' ? sum.hours : sum.pay, pct = target > 0 ? Math.min(1, achieved / target) : 0, reached = target > 0 && achieved >= target;
+    const fmtVal = v => type === 'hours' ? hrsText(fmt(v)) : money(v);
+    return {
+      type, target, pct, reached,
+      ach: target > 0 ? `${fmtVal(achieved)} ${t('goalOf')} ${fmtVal(target)}` : fmtVal(achieved),
+      pctText: target > 0 ? Math.round(pct * 100) + '%' : '—',
+      rem: target <= 0 ? t('goalSetPrompt') : reached ? t('goalReached') : `${fmtVal(target - achieved)} ${t('goalRemaining')}`
+    };
+  }
+  // Each profile's total, hours and paycheck, the grand total, and the goal for all profiles.
+  function openAllProfilesSheet(period) {
+    if (account.profiles.length < 2) return;
+    sheetMode = 'allProfiles'; editingId = null;
+    $('sheetTitle').textContent = t('allTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    const rows = account.profiles.map(p => Object.assign({ p }, profilePeriodStats(p, period)));
+    const hours = rows.reduce((a, r) => a + r.hours, 0), pay = rows.reduce((a, r) => a + r.pay, 0);
+    const pcStatus = r => {
+      if (period === 'all' || !currentUser || !paychecksLoaded || !r.hours) return '';
+      if (paychecksFor(period, r.p.id).length) return `<span class="pc-status ok">${escapeHtml(t('pcStatusOk'))}</span>`;
+      return period < currentMonthStr() ? `<span class="pc-status">${escapeHtml(t('pcStatusMissing'))}</span>` : '';
+    };
+    const split = pay > 0 ? `<div class="all-split" aria-hidden="true">${rows.filter(r => r.pay > 0).map(r => `<i class="pf-${profileColor(r.p)}" style="flex:${r.pay.toFixed(2)} 1 0"></i>`).join('')}</div>` : '';
+    const goal = period !== 'all' ? combinedGoalNumbers(period) : null;
+    $('sheetBody').innerHTML = `
+      <div class="all-head"><div class="all-total money-private">${escapeHtml(money(pay))}</div>
+        <div class="all-sub">${escapeHtml(hrsText(fmt(hours)))} · ${escapeHtml(period === 'all' ? t('allTime') : monthLongLabel(period))}</div>${split}</div>
+      <div class="list-group">${rows.map(r => `<button type="button" class="list-row row-btn all-row" data-prof="${escapeHtml(r.p.id)}">${profAvatar(r.p)}
+          <span class="rlabel">${escapeHtml(profileName(r.p))}<span class="rsub">${escapeHtml(hrsText(fmt(r.hours)))} · ${escapeHtml(money(profileDataById(r.p.id).settings.rate))} ${escapeHtml(t('rsPerHour'))}</span></span>
+          <span class="all-row-end"><span class="stat-val money-private">${escapeHtml(money(r.pay))}</span>${pcStatus(r)}</span></button>`).join('')}
+        <div class="list-row bd-total"><span class="rlabel">${escapeHtml(t('allTotal'))}</span><span class="stat-val money-private">${escapeHtml(money(pay))}</span></div></div>
+      ${goal ? `<div class="section-header" style="margin-top:18px;">${escapeHtml(t('combinedGoalToggle'))}</div>
+        <div class="list-group"><div class="cg-progress"><div class="cg-line"><span>${escapeHtml(goal.ach)}</span><b>${escapeHtml(goal.pctText)}</b></div>
+          <div class="cg-bar"><i class="${goal.reached ? 'done' : ''}" style="transform:scaleX(${goal.pct})"></i></div><div class="cg-rem">${escapeHtml(goal.rem)}</div></div></div>` : ''}`;
+    $('sheetBody').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => switchProfile(b.dataset.prof)));
+    openSheetOverlay();
+  }
+
+  // The switcher: every profile with this month's amount, a tick on the open one, and "Add profile".
+  function openProfilesSheet() {
+    sheetMode = 'profiles'; editingId = null;
+    $('sheetTitle').textContent = t('profilesTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    const month = currentMonthStr(), list = account.profiles;
+    const totals = list.map(p => profileMonthTotal(p, month));
+    const rows = list.map((p, i) => {
+      const on = p.id === activeProfileId;
+      const miss = profileMissesPaycheck(p.id) ? `<span class="prof-row-dot" title="${escapeHtml(t('profileRowDotLabel'))}"><span class="sr-only">${escapeHtml(t('profileRowDotLabel'))}</span></span>` : '';
+      return `<button type="button" class="list-row row-btn prof-row" data-prof="${escapeHtml(p.id)}"${on ? ' aria-current="true"' : ''}>${profAvatar(p)}<span class="prof-row-name">${escapeHtml(profileName(p))}${miss}</span><span class="prof-row-amt money-private">${escapeHtml(money(totals[i]))}</span>${on ? ICON_TICK : '<span class="prof-tick-space"></span>'}</button>`;
+    }).join('');
+    const add = list.length < PROFILE_MAX ? `<button type="button" class="list-row row-btn prof-row add" id="profSheetAdd"><span class="prof-plus">${ICON_PLUS}</span><span class="prof-row-name">${escapeHtml(t('profileAdd'))}</span></button>` : '';
+    const all = list.length > 1 ? `<div class="list-group"><button type="button" class="list-row row-btn prof-row prof-all" id="profSheetAll"><span class="prof-stack">${list.map(p => profAvatar(p)).join('')}</span><span class="prof-row-name">${escapeHtml(t('profileAllMonth'))}</span><span class="prof-row-amt money-private">${escapeHtml(money(totals.reduce((a, b) => a + b, 0)))}</span>${ICON_CHEV_R}</button></div>` : '';
+    $('sheetBody').innerHTML = `<div class="list-group">${rows}${add}</div>${all}<div class="section-footer">${escapeHtml(t('profileThisMonth').replace('{m}', monthLongLabel(month)))}</div>`;
+    $('sheetBody').querySelectorAll('[data-prof]').forEach(b => b.addEventListener('click', () => switchProfile(b.dataset.prof)));
+    if ($('profSheetAdd')) $('profSheetAdd').addEventListener('click', openAddProfile);
+    if ($('profSheetAll')) $('profSheetAll').addEventListener('click', () => openAllProfilesSheet(month));
+    openSheetOverlay();
+  }
+  document.querySelectorAll('[data-prof-btn]').forEach(b => b.addEventListener('click', openProfilesSheet));
+
+  function swatchesHtml(selected) {
+    return `<div class="prof-swatches" role="radiogroup" aria-label="${escapeHtml(t('profileColorLabel'))}">${PROFILE_COLORS.map(c =>
+      `<button type="button" class="prof-swatch pf-${c}" role="radio" data-color="${c}" aria-checked="${c === selected}" aria-label="${escapeHtml(t(COLOR_LABELS[c]))}"></button>`).join('')}</div>`;
+  }
+  function bindSwatches(root, onPick) {
+    root.querySelectorAll('.prof-swatch').forEach(b => b.addEventListener('click', () => {
+      root.querySelectorAll('.prof-swatch').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+      onPick(b.dataset.color);
+    }));
+  }
+
+  // Name & colour of the open profile (Settings), with "Delete profile" at the bottom.
+  let profEditColor = null;
+  function openProfileEditSheet() {
+    const p = activeProfile();
+    sheetMode = 'profileEdit'; editingId = p.id;
+    profEditColor = profileColor(p);
+    $('sheetTitle').textContent = t('profileEditTitle');
+    const only = account.profiles.length < 2;
+    $('sheetBody').innerHTML = `
+      <div class="field-group">
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('profileNameLabel'))}</div>
+        <div class="list-group"><input type="text" class="prof-name-input" id="fProfName" maxlength="${PROFILE_NAME_MAX}" autocomplete="off" value="${escapeHtml(p.name)}" placeholder="${escapeHtml(t('profileDefaultName'))}" aria-label="${escapeHtml(t('profileNameLabel'))}"></div>
+        <div class="prof-err" id="fProfErr" role="alert"></div>
+      </div>
+      <div class="field-group">
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('profileColorLabel'))}</div>
+        <div class="list-group" style="padding:12px 14px;">${swatchesHtml(profEditColor)}</div>
+      </div>
+      <div class="field-group">${only ? `<div class="prof-note">${escapeHtml(t('profileDeleteOnly'))}</div>`
+        : `<button type="button" class="btn-danger btn-block" id="fProfDelete">${escapeHtml(t('profileDelete'))}</button>`}</div>`;
+    bindSwatches($('sheetBody'), c => { profEditColor = c; });
+    $('fProfName').addEventListener('input', () => { $('fProfErr').textContent = ''; });
+    if ($('fProfDelete')) $('fProfDelete').addEventListener('click', () => openProfileDeleteSheet(p.id));
+    openSheetOverlay();
+  }
+  function saveProfileEdit() {
+    const p = account.profiles.find(x => x.id === editingId);
+    if (!p) { closeSheetOverlay(); return; }
+    const name = $('fProfName').value.trim().slice(0, PROFILE_NAME_MAX);
+    if (nameTaken(name || t('profileDefaultName'), p.id)) { $('fProfErr').textContent = t('profileNameTaken'); return; }
+    // An untouched default colour isn't written, so an account with one profile keeps today's document.
+    const color = profEditColor === profileColor(p) && !p.color ? '' : profEditColor;
+    if (name !== p.name || color !== p.color) {
+      account = currentAccount();
+      account.profiles = account.profiles.map(x => x.id === p.id ? Object.assign({}, x, { name, color }) : x);
+      save();
+      renderProfileUI();
+    }
+    closeSheetOverlay();
+  }
+  $('profEditRow').addEventListener('click', openProfileEditSheet);
+
+  // Deleting a profile takes its shifts and paychecks with it, so it needs its name typed. The last one stays.
+  function openProfileDeleteSheet(id) {
+    const p = account.profiles.find(x => x.id === id);
+    if (!p || account.profiles.length < 2) return;
+    sheetMode = 'profileDelete'; editingId = id;
+    const word = profileName(p);
+    $('sheetTitle').textContent = t('profileDeleteTitle');
+    $('sheetSave').style.visibility = 'hidden';
+    $('sheetBody').innerHTML = `
+      <div class="erase-warning"><strong>${escapeHtml(t('profileDeleteWarnTitle').replace('{n}', word))}</strong>${escapeHtml(t('profileDeleteWarnBody'))}</div>
+      <div class="field-group">
+        <div class="section-header" style="margin:0 2px 8px;">${escapeHtml(t('profileDeleteType').replace('{w}', word))}</div>
+        <div class="list-group"><label class="auth-field"><input type="text" id="fProfDeleteConfirm" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${escapeHtml(word)}"></label></div>
+      </div>
+      <button type="button" class="btn-danger btn-block" id="fProfDeleteBtn" disabled>${escapeHtml(t('profileDeleteBtn'))}</button>`;
+    const input = $('fProfDeleteConfirm'), btn = $('fProfDeleteBtn');
+    const matches = () => input.value.trim().toLocaleLowerCase() === word.toLocaleLowerCase();
+    input.addEventListener('input', () => { btn.disabled = !matches(); });
+    btn.addEventListener('click', () => { if (matches()) deleteProfile(id); });
+    openSheetOverlay();
+  }
+  function deleteProfile(id) {
+    const p = account.profiles.find(x => x.id === id);
+    if (!p || account.profiles.length < 2) return;
+    const name = profileName(p), wasOpen = id === activeProfileId;
+    account = currentAccount();
+    account.profiles = account.profiles.filter(x => x.id !== id);
+    if (wasOpen) { activeProfileId = account.profiles[0].id; state = account.profiles[0].data; rememberProfile(activeProfileId); }
+    save();
+    flushRemoteWrite();
+    closeSheetOverlay();
+    // its paychecks: the first profile's carry no `profile` field, every other profile's carry its id
+    if (currentUser) {
+      const uid = currentUser.uid;
+      paychecksRef(uid).get()
+        .then(snap => Promise.all(snap.docs.filter(d => (d.data().profile || MAIN_PROFILE) === id).map(d => deletePaycheckDocs(uid, { id: d.id }))))
+        .catch(err => { console.error('Profile paychecks delete failed:', err); showToast(t('profileDeleteFailed')); });
+    }
+    if (wasOpen) playProfileSwitch(account.profiles[0], refreshAll);
+    else refreshAll();
+    showToast(t('profileDeleted').replace('{n}', name));
+  }
+
+  // Adding a profile uses the setup's pages: name, colour and where the pay rules start from, then Pay and
+  // Weekend & extras. The profile is created when the first page is done; the later pages edit it like Settings.
+  let newProf = null;
+  function newProfileId() {
+    let id;
+    do { id = 'p' + Math.random().toString(36).slice(2, 12); } while (!ID_RE.test(id) || account.profiles.some(p => p.id === id));
+    return id;
+  }
+  function rulesFrom(from) {
+    const src = from === 'default' ? defaultState().settings : profileDataById(from).settings;
+    return ratesFrom(src, src);
+  }
+  function profileDataById(id) {
+    const p = account.profiles.find(x => x.id === id);
+    return !p ? defaultState() : p.id === activeProfileId ? state : p.data;
+  }
+  function openAddProfile() {
+    if (account.profiles.length >= PROFILE_MAX) { showToast(t('profileMax')); return; }
+    if (sheetIsOpen()) closeSheetOverlay();
+    const used = account.profiles.map(profileColor);
+    newProf = { name: '', color: PROFILE_COLORS.find(c => !used.includes(c)) || PROFILE_COLORS[0], from: 'default', id: null, appliedFrom: null, prevId: activeProfileId };
+    obStep = 0;
+    $('onboard').classList.remove('hidden', 'closing');
+    renderAddProfile(0);
+  }
+  $('profAddRow').addEventListener('click', openAddProfile);
+  function renderAddProfile(dir) {
+    const el = $('onboard'), last = 2, np = newProf;
+    const sources = account.profiles.filter(p => p.id !== np.id);
+    const opt = (value, label, sub) => `<label class="list-row prof-start"><input type="radio" name="obFrom" value="${escapeHtml(value)}"${np.from === value ? ' checked' : ''}><span class="rlabel">${escapeHtml(label)}<span class="rsub">${escapeHtml(sub)}</span></span></label>`;
+    const pages = [
+      () => `<h1 class="large-title" id="obTitle">${escapeHtml(t('profileNewTitle'))}</h1><p class="ob-lead">${escapeHtml(t('profileNewLead'))}</p>
+        <div class="list-group"><div class="list-row"><label class="rlabel" for="obProfName">${escapeHtml(t('profileNameLabel'))}</label><input type="text" id="obProfName" maxlength="${PROFILE_NAME_MAX}" autocomplete="off" value="${escapeHtml(np.name)}" placeholder="${escapeHtml(t('profileNamePlaceholder'))}"></div>
+          <div class="list-row"><div class="rlabel">${escapeHtml(t('profileColorLabel'))}</div>${swatchesHtml(np.color)}</div></div>
+        <div class="prof-err" id="obProfErr" role="alert"></div>
+        <div class="section-header">${escapeHtml(t('profileStartWith'))}</div>
+        <div class="list-group">${opt('default', t('profileStartDefault'), rateSummary(rulesFrom('default')))}
+          ${sources.map(p => opt(p.id, t('profileStartCopy').replace('{n}', profileName(p)), rateSummary(rulesFrom(p.id)))).join('')}</div>`,
+      () => obPayHtml(t('profilePayLead').replace('{n}', np.name), false),
+      () => obRulesHtml()
+    ];
+    const dots = [0, 1, 2].map(i => `<i class="${i === obStep ? 'on' : ''}"></i>`).join('');
+    el.innerHTML = `<div class="ob-top">
+        <button type="button" class="ob-back" id="obBack">${obStep ? ICON_CHEV_L : ''}<span>${escapeHtml(t(obStep ? 'obBack' : 'cancel'))}</span></button>
+        <div class="ob-dots" aria-hidden="true">${dots}</div>
+        ${obStep ? `<button type="button" class="ob-skip" id="obSkip">${escapeHtml(t('obSkip'))}</button>` : '<span></span>'}</div>
+      <div class="ob-body${dir ? (dir > 0 ? ' fwd' : ' back') : ''}">${pages[obStep]()}</div>
+      <div class="ob-foot"><button type="button" class="btn-accent btn-block" id="obNext">${escapeHtml(t(obStep < last ? 'obContinue' : 'profileDone'))}</button></div>`;
+    const go = d => { obStep = Math.max(0, Math.min(last, obStep + d)); renderAddProfile(d); };
+    $('obBack').addEventListener('click', () => { if (obStep) go(-1); else cancelAddProfile(); });
+    if ($('obSkip')) $('obSkip').addEventListener('click', finishAddProfile);
+    $('obNext').addEventListener('click', () => {
+      if (obStep === 0) { if (createOrUpdateNewProfile()) go(1); return; }
+      if (obStep < last) go(1); else finishAddProfile();
+    });
+    if (obStep === 0) {
+      bindSwatches(el, c => { np.color = c; });
+      $('obProfName').addEventListener('input', () => { np.name = $('obProfName').value; $('obProfErr').textContent = ''; });
+      el.querySelectorAll('[name="obFrom"]').forEach(r => r.addEventListener('change', () => { np.from = r.value; }));
+      if (!np.id) setTimeout(() => { if ($('obProfName')) $('obProfName').focus(); }, 300);
+    } else {
+      el.querySelectorAll('.ob-body input, .ob-body select').forEach(i => i.addEventListener('change', readOnboarding));
+    }
+  }
+  function createOrUpdateNewProfile() {
+    const np = newProf, name = $('obProfName').value.trim().slice(0, PROFILE_NAME_MAX);
+    if (!name) { $('obProfErr').textContent = t('profileNameNeeded'); return false; }
+    if (nameTaken(name, np.id)) { $('obProfErr').textContent = t('profileNameTaken'); return false; }
+    np.name = name;
+    if (!np.id) {
+      const base = defaultState();
+      Object.assign(base.settings, pickShared(state.settings), rulesFrom(np.from));
+      const id = newProfileId();
+      account = currentAccount();
+      account.profiles = account.profiles.concat([{ id, name, color: np.color, data: normalizeState(base) }]);
+      np.id = id; np.appliedFrom = np.from;
+      activateProfile(id);
+    } else {
+      account = currentAccount();
+      account.profiles = account.profiles.map(x => x.id === np.id ? Object.assign({}, x, { name, color: np.color }) : x);
+      // the starting rules changed after coming back to this page
+      if (np.from !== np.appliedFrom) { Object.assign(state.settings, rulesFrom(np.from)); np.appliedFrom = np.from; }
+    }
+    save();
+    refreshAll();
+    return true;
+  }
+  // Cancel on the first page: nothing is kept (a profile made before coming back to it is removed again).
+  function cancelAddProfile() {
+    const np = newProf;
+    newProf = null;
+    if (np && np.id) {
+      account = currentAccount();
+      account.profiles = account.profiles.filter(x => x.id !== np.id);
+      activateProfile(account.profiles.some(x => x.id === np.prevId) ? np.prevId : account.profiles[0].id);
+      save();
+      refreshAll();
+    }
+    closeOnboarding(() => {});
+  }
+  function finishAddProfile() {
+    const np = newProf;
+    newProf = null;
+    closeOnboarding(() => { if (np) showToast(t('profileAdded').replace('{n}', np.name)); replayEntrance(activeTab); });
+  }
+
   // ---- first-run setup: shown once after creating an account (and again on this device if closed halfway) ----
   // Three short pages in the Settings style: language, pay, weekend & extras, then a finish page.
   // Every change is saved straight into the settings, so Skip (or closing the app) keeps whatever was set.
@@ -3882,18 +4616,20 @@
   function obDaySelect(id, dow) {
     return `<select id="${id}" aria-label="${escapeHtml(t(id === 'obWkStartDow' ? 'rowStartDay' : 'rowEndDay'))}">${DOW_FULL[getLang()].map((d, i) => `<option value="${i}"${i === dow ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('')}</select>`;
   }
-  function renderOnboarding(dir) {
-    const s = state.settings, el = $('onboard'), last = 3;
+  // The Pay and the Weekend & extras pages, also used when adding a profile (without the job name, asked on that flow's
+  // first page, and without the currency, which is shared). The first-run setup asks for the job's name here; empty
+  // keeps the default ("My job"), which also keeps the account's document exactly as before profiles.
+  function obPayHtml(lead, withCurrency) {
+    const s = state.settings;
+    return `<h1 class="large-title" id="obTitle">${escapeHtml(t('obPayTitle'))}</h1><p class="ob-lead">${escapeHtml(lead)}</p>
+        <div class="list-group">${withCurrency ? `<div class="list-row"><label class="rlabel" for="obJobName">${escapeHtml(t('obJobName'))}</label>${obInput('obJobName', activeProfile().name, `type="text" maxlength="${PROFILE_NAME_MAX}" autocomplete="off" placeholder="${escapeHtml(t('profileDefaultName'))}"`)}</div>` : ''}<div class="list-row"><label class="rlabel" for="obRate">${escapeHtml(t('rowRate'))}</label>${obInput('obRate', s.rate, 'type="number" inputmode="decimal" min="0" step="0.5"')}</div>
+          ${withCurrency ? `<div class="list-row"><label class="rlabel" for="obCurrency">${escapeHtml(t('rowCurrency'))}</label>${obInput('obCurrency', s.currency, 'type="text" maxlength="4"')}</div>` : ''}</div>
+        <div class="section-footer">${escapeHtml(t('obPayFoot'))}</div>`;
+  }
+  function obRulesHtml() {
+    const s = state.settings;
     const pct = (id, v, label) => `<div class="list-row"><label class="rlabel" for="${id}">${escapeHtml(t(label))}</label><span class="ob-num">${obInput(id, v, 'type="number" inputmode="decimal" min="0" max="1000"')}<span>%</span></span></div>`;
-    const pages = [
-      () => `<div class="ob-mark">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obWelcomeTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obWelcomeLead'))}</p>
-        <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(t('languageLabel'))}</div>
-          <div class="seg-toggle" id="obLang"><button type="button" class="seg-btn${getLang() === 'en' ? ' active' : ''}" data-lang="en">English</button><button type="button" class="seg-btn${getLang() === 'he' ? ' active' : ''}" data-lang="he">עברית</button></div></div></div>`,
-      () => `<h1 class="large-title" id="obTitle">${escapeHtml(t('obPayTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obPayLead'))}</p>
-        <div class="list-group"><div class="list-row"><label class="rlabel" for="obRate">${escapeHtml(t('rowRate'))}</label>${obInput('obRate', s.rate, 'type="number" inputmode="decimal" min="0" step="0.5"')}</div>
-          <div class="list-row"><label class="rlabel" for="obCurrency">${escapeHtml(t('rowCurrency'))}</label>${obInput('obCurrency', s.currency, 'type="text" maxlength="4"')}</div></div>
-        <div class="section-footer">${escapeHtml(t('obPayFoot'))}</div>`,
-      () => `<h1 class="large-title" id="obTitle">${escapeHtml(t('obRulesTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obRulesLead'))}</p>
+    return `<h1 class="large-title" id="obTitle">${escapeHtml(t('obRulesTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obRulesLead'))}</p>
         <div class="section-header">${escapeHtml(t('obWeekendSec'))}</div>
         <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(t('obStarts'))}</div><span class="ob-when">${obDaySelect('obWkStartDow', s.weekendStartDow)}${obInput('obWkStartTime', s.weekendStartTime, 'type="time" aria-label="' + escapeHtml(t('rowStartTime')) + '"')}</span></div>
           <div class="list-row"><div class="rlabel">${escapeHtml(t('obEnds'))}</div><span class="ob-when">${obDaySelect('obWkEndDow', s.weekendEndDow)}${obInput('obWkEndTime', s.weekendEndTime, 'type="time" aria-label="' + escapeHtml(t('rowEndTime')) + '"')}</span></div>
@@ -3901,8 +4637,18 @@
         <div class="section-header">${escapeHtml(t('obExtrasSec'))}</div>
         <div class="list-group">${pct('obHolidayPercent', s.holidayPercent, 'obHoliday')}
           <div class="list-row"><label class="rlabel" for="obOtThreshold">${escapeHtml(t('obOtAfter'))}</label>${obInput('obOtThreshold', s.overtimeThreshold, 'type="number" inputmode="decimal" min="0" max="24" step="0.5"')}</div>
-          ${pct('obOtPercent', s.overtimePercent, 'obOtPays')}</div>`,
-      () => `<div class="ob-mark ob-mark-done">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obDoneTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obDoneLead'))}</p>`
+          ${pct('obOtPercent', s.overtimePercent, 'obOtPays')}</div>`;
+  }
+  function renderOnboarding(dir) {
+    const el = $('onboard'), last = 3;
+    const pages = [
+      () => `<div class="ob-mark">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obWelcomeTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obWelcomeLead'))}</p>
+        <div class="list-group"><div class="list-row"><div class="rlabel">${escapeHtml(t('languageLabel'))}</div>
+          <div class="seg-toggle" id="obLang"><button type="button" class="seg-btn${getLang() === 'en' ? ' active' : ''}" data-lang="en">English</button><button type="button" class="seg-btn${getLang() === 'he' ? ' active' : ''}" data-lang="he">עברית</button></div></div></div>`,
+      () => obPayHtml(t('obPayLead'), true),
+      () => obRulesHtml(),
+      () => `<div class="ob-mark ob-mark-done">${obMark()}</div><h1 class="large-title" id="obTitle">${escapeHtml(t('obDoneTitle'))}</h1><p class="ob-lead">${escapeHtml(t('obDoneLead'))}</p>
+        <p class="ob-more">${escapeHtml(t('obDoneProfiles'))}</p>`
     ];
     const dots = [0, 1, 2].map(i => `<i class="${i === Math.min(obStep, 2) ? 'on' : ''}"></i>`).join('');
     el.innerHTML = `<div class="ob-top">
@@ -3942,6 +4688,13 @@
     };
     const time = (id, current) => { if (!has(id)) return current; if (isValidTime($(id).value)) return $(id).value; rejected = true; return current; };
     if (has('obCurrency')) s.currency = $('obCurrency').value.trim().slice(0, LIMITS.currency) || s.currency;
+    if (has('obJobName')) {
+      const name = $('obJobName').value.trim().slice(0, PROFILE_NAME_MAX);
+      if (name !== activeProfile().name && !nameTaken(name || t('profileDefaultName'), activeProfileId)) {
+        account = currentAccount();
+        account.profiles = account.profiles.map(p => p.id === activeProfileId ? Object.assign({}, p, { name }) : p);
+      }
+    }
     s.rate = field('obRate', 0, 100000, s.rate);
     if (has('obWkStartDow')) s.weekendStartDow = +$('obWkStartDow').value;
     if (has('obWkEndDow')) s.weekendEndDow = +$('obWkEndDow').value;
@@ -3966,7 +4719,7 @@
     const docRef = db.collection('users').doc(user.uid);
     const owner = getCacheOwner();
     const localIsMine = !owner || owner === user.uid;
-    if (!localIsMine) { state = freshState(); setBase(null); refreshAll(); }
+    if (!localIsMine) { setAccount(docToAccount(freshState())); setBase(null); refreshAll(); }
     let firstSnapshot = true;
     let backupChecked = false;
     let lastRemoteJson = null;
@@ -3980,8 +4733,8 @@
         // While this device has unsent changes, the cloud copy is merged in by a sync instead
         // of replacing them; a sync's own echo is recognised and skipped.
         if (!snap.metadata.fromCache && !snap.metadata.hasPendingWrites) {
-          const remote = normalizeState(snap.data());
-          const remoteJson = JSON.stringify(remote);
+          const remote = docToAccount(snap.data());
+          const remoteJson = JSON.stringify(accountToDoc(remote));
           const fresh = remoteJson !== lastRemoteJson;
           lastRemoteJson = remoteJson;
           if (syncing) { if (fresh && remoteJson !== inflightJson) syncAgain = true; }
@@ -3995,7 +4748,7 @@
           if (state.settings.language !== lang) { state.settings.language = lang; save(); refreshAll(); }
         }
         // The day's backup is taken from server-confirmed data, before today's edits.
-        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid, normalizeState(snap.data())); }
+        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid, normalizeDoc(snap.data())); }
       } else if (!snap.metadata.fromCache) {
         // New account: seed it with this device's data only if that data belongs to this user.
         remoteReady = true;
@@ -4041,7 +4794,7 @@
         if (leavingToSignIn) return;
         // A cache stamped with an account that's no longer signed in (e.g. "Remember me"
         // was off) is private data, so it's removed rather than left on the device.
-        if (getCacheOwner()) { clearLocalCache(); state = freshState(); refreshAll(); }
+        if (getCacheOwner()) { clearLocalCache(); setAccount(docToAccount(freshState())); refreshAll(); }
         closeSheetOverlay();
         authMode = 'signin';
         updateAuthUI();

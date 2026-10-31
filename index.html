@@ -55,6 +55,8 @@
     --ease-sheet: cubic-bezier(.32, .72, 0, 1);
     --cap: #eceef2;
     --today: #ffd23f;
+    /* profile colours: clear of the blue (actions), red (holidays, errors), amber (overtime) and green (goal reached) */
+    --pf-teal: #0f7f73; --pf-violet: #7d4fc4; --pf-gold: #857512; --pf-rose: #b5428a; --pf-slate: #5a687d; --pf-ink: #ffffff;
   }
   /* Appearance: Auto follows the phone; Settings can force Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
@@ -91,6 +93,7 @@
       --toast-action: #9fbdf5;
       --cap: #2c2c2e;
       --today: #ffd23f;
+      --pf-teal: #3cc2b1; --pf-violet: #b493f0; --pf-gold: #d6c25a; --pf-rose: #ef86c4; --pf-slate: #a3b2c8; --pf-ink: #000000;
     }
   }
   :root[data-theme="dark"] {
@@ -126,6 +129,7 @@
     --toast-action: #9fbdf5;
     --cap: #2c2c2e;
     --today: #ffd23f;
+    --pf-teal: #3cc2b1; --pf-violet: #b493f0; --pf-gold: #d6c25a; --pf-rose: #ef86c4; --pf-slate: #a3b2c8; --pf-ink: #000000;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   button, input, select, textarea { font-family: inherit; }
@@ -288,6 +292,123 @@
   .title-add .ico-add { width: 22px; height: 22px; }
   .title-add:active { transform: scale(0.93); }
   .title-add.hidden { display: none; }
+  .title-row .large-title { flex: none; white-space: nowrap; }
+
+  /* profiles (one per job): the button at the top of every tab, the switcher, the switch itself */
+  .pf-teal { --pf: var(--pf-teal); } .pf-violet { --pf: var(--pf-violet); } .pf-gold { --pf: var(--pf-gold); }
+  .pf-rose { --pf: var(--pf-rose); } .pf-slate { --pf: var(--pf-slate); }
+  .prof-av { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--pf); color: var(--pf-ink); display: grid; place-items: center; font-size: 13.5px; font-weight: 700; line-height: 1; }
+  .prof-av.sm { width: 18px; height: 18px; font-size: 9.5px; }
+  .prof-av.lg { width: 34px; height: 34px; font-size: 15px; }
+  .title-actions { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto; }
+  .prof-btn { flex: 0 1 auto; max-width: 52%; min-width: 0; display: inline-flex; align-items: center; gap: 7px; margin-top: 4px; padding: 5px 10px 5px 5px; border: none; border-radius: 999px; background: var(--card); color: var(--text); font: inherit; font-size: 15px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; transition: transform .16s var(--ease-out); }
+  [dir="rtl"] .prof-btn { padding: 5px 5px 5px 10px; }
+  .title-actions .prof-btn { flex: 0 1 auto; max-width: none; }
+  .prof-btn:active { transform: scale(0.96); }
+  .prof-btn { position: relative; }
+  .prof-dot { position: absolute; top: 2px; inset-inline-start: 25px; width: 10px; height: 10px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 2px var(--card); animation: popIn .3s var(--ease-out) backwards; }
+  .prof-row-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--red); margin-inline-start: 8px; vertical-align: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #combinedGoalWrap.hidden, #combinedGoalBody.hidden { display: none; }
+  #combinedGoalWrap .section-header { margin-top: 22px; }
+  .cg-progress { padding: 13px 14px 14px; }
+  .cg-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .cg-line b { font-size: 16px; }
+  .cg-bar { height: 8px; border-radius: 4px; background: var(--track-off); overflow: hidden; margin: 9px 0 7px; }
+  .cg-bar i { display: block; height: 100%; background: var(--accent); transform-origin: left center; transform: scaleX(0); transition: transform .5s var(--ease-out), background-color .3s ease; }
+  [dir="rtl"] .cg-bar i { transform-origin: right center; }
+  .cg-bar i.done { background: var(--green); }
+  .cg-rem { font-size: 12.5px; color: var(--muted); }
+  /* other profiles seen from the open one: calendar rings, muted lines in the list, clash warnings */
+  .luach-oth { position: absolute; top: 7px; left: min(calc(50% + 12px), calc(100% - 9px)); display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
+  [dir="rtl"] .luach-oth { left: auto; right: min(calc(50% + 12px), calc(100% - 9px)); }
+  .luach-oth i { display: block; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--pf); box-sizing: border-box; }
+  .luach-legend i.luach-oth-key { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--pf); background: none; box-sizing: border-box; }
+  .other-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 14px; border: none; background: none; font: inherit; font-size: 13.5px; color: var(--muted); text-align: start; cursor: pointer; }
+  .other-row:active { background-color: var(--press); }
+  .other-row .other-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .other-row .other-text b { font-weight: 600; }
+  .other-row .other-switch { flex: none; display: inline-flex; align-items: center; gap: 2px; color: var(--accent); font-weight: 600; }
+  .other-row .other-switch .ico-chev { width: 13px; height: 13px; transform: rotate(-90deg); }
+  [dir="rtl"] .other-row .other-switch .ico-chev { transform: rotate(90deg); }
+  .prof-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+  .prof-chips::-webkit-scrollbar { display: none; }
+  .prof-chip { flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px 6px 6px; border: none; border-radius: 999px; background: var(--card2); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: transform .16s var(--ease-out), box-shadow .16s ease; }
+  [dir="rtl"] .prof-chip { padding: 6px 6px 6px 12px; }
+  .prof-chip .prof-av.sm { width: 22px; height: 22px; font-size: 10.5px; }
+  .prof-chip:active { transform: scale(0.96); }
+  .prof-chip[aria-checked="true"] { box-shadow: inset 0 0 0 2px var(--accent); background: var(--card); }
+  .clash-warn { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; border-radius: 12px; padding: 11px 12px; background: var(--red-tint); color: var(--red); font-size: 14px; line-height: 1.35; }
+  .clash-warn.hidden { display: none; }
+  .clash-warn svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+  .clash-warn small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .all-line { width: 100%; display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 10px 12px; border: none; border-radius: 12px; background: var(--card); color: var(--text); font: inherit; font-size: 14px; text-align: start; cursor: pointer; box-shadow: var(--shadow); }
+  .all-line.hidden { display: none; }
+  .all-line:active { background-color: var(--press); }
+  .all-line .all-label { flex: 1; min-width: 0; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .all-line .all-amt { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .all-line .all-chev .ico-chev, .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
+  [dir="rtl"] .all-line .all-chev .ico-chev, [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
+  .all-head { padding: 2px 2px 14px; }
+  .all-total { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .all-sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .all-split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px; }
+  .all-split i { display: block; background: var(--pf); min-width: 4px; }
+  .all-row { justify-content: flex-start; gap: 12px; }
+  .all-row .rlabel { flex: 1; min-width: 0; font-weight: 600; }
+  .all-row-end { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .pc-status { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .pc-status.ok { color: var(--green); font-weight: 600; }
+  .prof-btn .prof-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prof-btn .ico-chev { flex: none; width: 15px; height: 15px; color: var(--muted); }
+  .row-btn { width: 100%; background: none; border-left: none; border-right: none; border-top: none; font: inherit; color: inherit; text-align: start; cursor: pointer; }
+  .row-btn:active { background-color: var(--press); }
+  .row-end { display: inline-flex; align-items: center; min-width: 0; }
+  .row-end .picker-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  [dir="rtl"] .row-end .ico-chev, [dir="rtl"] .prof-row .ico-chev { transform: scaleX(-1); }
+  .prof-add-row .rlabel { color: var(--accent); font-weight: 600; }
+  .prof-add-row.hidden { display: none; }
+  .prof-sec { display: flex; align-items: center; gap: 7px; }
+  .prof-sec .prof-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prof-row { justify-content: flex-start; gap: 12px; }
+  .prof-row .prof-row-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prof-row .prof-row-amt { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .prof-row .prof-tick { flex: none; width: 20px; height: 20px; color: var(--accent); }
+  .prof-row .prof-tick-space { flex: none; width: 20px; }
+  .prof-row.add .prof-row-name { color: var(--accent); }
+  .prof-row .prof-plus { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--cap); color: var(--accent); display: grid; place-items: center; }
+  .prof-row .prof-plus svg { width: 16px; height: 16px; }
+  .prof-all .prof-row-name { font-weight: 500; color: var(--muted); }
+  .prof-all .prof-row-amt { color: var(--text); font-weight: 700; }
+  .prof-stack { display: inline-flex; flex: none; }
+  .prof-stack .prof-av { width: 22px; height: 22px; font-size: 10px; border: 2px solid var(--card); margin-inline-end: -7px; }
+  .prof-stack .prof-av:last-child { margin-inline-end: 0; }
+  .prof-swatches { display: flex; gap: 14px; padding: 4px 2px; }
+  .prof-swatch { flex: none; width: 32px; height: 32px; border-radius: 50%; border: none; padding: 0; background: var(--pf); cursor: pointer; transition: transform .16s var(--ease-out), box-shadow .16s ease; }
+  .prof-swatch:active { transform: scale(0.92); }
+  .prof-swatch[aria-checked="true"] { box-shadow: 0 0 0 2.5px var(--sheet-bg), 0 0 0 5px var(--pf); }
+  .onboard .prof-swatch[aria-checked="true"] { box-shadow: 0 0 0 2.5px var(--card), 0 0 0 5px var(--pf); }
+  .prof-name-input { width: 100%; border: none; background: transparent; font: inherit; font-size: 16px; color: var(--text); padding: 14px; }
+  .prof-name-input:focus { outline: none; }
+  .prof-start { justify-content: flex-start; align-items: flex-start; gap: 12px; cursor: pointer; }
+  .prof-start .rlabel { flex: 1; min-width: 0; }
+  .prof-start input { flex: none; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--accent); }
+  .prof-start .rlabel .rsub { line-height: 1.35; }
+  .prof-err { color: var(--red); font-size: 13px; margin: 6px 6px 0; min-height: 17px; }
+  .prof-note { font-size: 13px; color: var(--muted); text-align: center; margin: 4px 8px 0; line-height: 1.4; }
+  /* the switch: a brief wash of the new profile's colour while the page cross-fades (a plain fade with Reduce Motion) */
+  .prof-wash { position: absolute; inset: 0; z-index: 20; pointer-events: none; background: var(--pf, transparent); opacity: 0; }
+  .prof-wash.on { opacity: .14; transition: opacity .1s ease-out; }
+  .prof-wash.off { transition: opacity .3s ease; }
+  .content.prof-out { opacity: 0; transform: scale(.985); transition: opacity .12s var(--ease-in), transform .12s var(--ease-in); }
+  .content.prof-in { transition: opacity .26s var(--ease-out), transform .26s var(--ease-out); }
+  @media (prefers-reduced-motion: reduce) {
+    .prof-wash { display: none; }
+    .content.prof-out { transform: none; transition: opacity .12s linear; }
+    .content.prof-in { transition: opacity .2s linear; }
+    .prof-btn, .prof-swatch, .cg-bar i, .prof-chip { transition: none; }
+    .prof-dot { animation: none; }
+  }
 
   .tabbar {
     position: relative; display: flex; background: var(--tabbar-bg);
@@ -467,6 +588,7 @@
   .ob-when input[type=time]::-webkit-calendar-picker-indicator { display: none; }
   .ob-when select:focus, .ob-when input:focus { outline: none; }
   .ob-foot { padding-top: 12px; }
+  .ob-more { color: var(--muted); font-size: 14px; line-height: 1.45; margin: -6px 0 0; padding-top: 14px; border-top: 1px solid var(--sep); }
   .ob-link { display: block; width: 100%; border: none; background: none; font: inherit; font-size: 15px; font-weight: 600; color: var(--accent); padding: 14px; cursor: pointer; }
   @media (prefers-reduced-motion: reduce) { .ob-body.fwd, .ob-body.back { animation: fadeIn .2s ease backwards; } }
 
@@ -602,6 +724,7 @@
 </div>
 <div class="app">
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="prof-wash" id="profWash" aria-hidden="true"></div>
   <div class="onboard hidden" id="onboard" role="dialog" aria-modal="true" aria-labelledby="obTitle"></div>
   <div class="auth-screen loading" id="authScreen">
     <form class="auth-card" id="authForm" novalidate>
@@ -630,7 +753,7 @@
   <div class="content" id="content">
 
     <section class="tab-page" id="tab-summary">
-      <div class="large-title" data-i18n="titleSummary">Summary</div>
+      <div class="title-row"><div class="large-title" data-i18n="titleSummary">Summary</div><button type="button" class="prof-btn" data-prof-btn></button></div>
       <div class="heb-sub" id="summaryHebMonth" lang="he"></div>
       <div class="pills" id="summaryMonthPills"></div>
       <div class="balance">
@@ -638,6 +761,7 @@
         <div class="balance-value money-private" id="sumTotal">0</div>
         <div class="balance-sub money-private" id="sumSub"></div>
       </div>
+      <button type="button" class="all-line hidden" id="allProfilesLine"></button>
       <div class="pc-reminder hidden" id="paycheckReminder" role="status"></div>
       <div class="luach" id="summaryCalendar"></div>
       <div class="luach-legend" id="summaryCalendarLegend"></div>
@@ -654,14 +778,14 @@
     </section>
 
     <section class="tab-page hidden" id="tab-shifts">
-      <div class="title-row"><div class="large-title" data-i18n="titleShifts">Shifts</div><button type="button" class="title-add" id="fab" aria-label="New Shift"><svg class="ico-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      <div class="title-row"><div class="large-title" data-i18n="titleShifts">Shifts</div><div class="title-actions"><button type="button" class="prof-btn" data-prof-btn></button><button type="button" class="title-add" id="fab" aria-label="New Shift"><svg class="ico-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div></div>
       <div class="pills" id="shiftsMonthPills"></div>
       <div class="list-group" id="shiftsList"></div>
     </section>
 
 
     <section class="tab-page hidden" id="tab-goals">
-      <div class="large-title" data-i18n="titleGoals">Monthly Goal</div>
+      <div class="title-row"><div class="large-title" data-i18n="titleGoals">Monthly Goal</div><button type="button" class="prof-btn" data-prof-btn></button></div>
       <div class="pills" id="goalMonthPills"></div>
       <div class="list-group">
         <div class="list-row">
@@ -687,12 +811,40 @@
         <div class="goal-achieved" id="goalAchievedLabel"></div>
         <div class="goal-remaining" id="goalRemainingLabel"></div>
       </div>
+      <div id="combinedGoalWrap" class="hidden">
+        <div class="section-header" data-i18n="combinedGoalTitle">All profiles together</div>
+        <div class="list-group">
+          <div class="list-row">
+            <div class="rlabel" data-i18n="combinedGoalToggle">Goal for all profiles</div>
+            <label class="switch"><input type="checkbox" id="combinedGoalOn"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div id="combinedGoalBody" class="hidden">
+            <div class="list-row">
+              <div class="rlabel" data-i18n="goalTypeLabel">Goal type</div>
+              <div class="seg-toggle" id="combinedGoalType">
+                <button class="seg-btn" data-goaltype="hours" data-i18n="goalTypeHours">Hours</button>
+                <button class="seg-btn" data-goaltype="income" data-i18n="goalTypeIncome">Income</button>
+              </div>
+            </div>
+            <div class="list-row">
+              <div class="rlabel" data-i18n="goalTargetLabel">Monthly target</div>
+              <input type="number" id="combinedGoalTarget" min="0" step="1" inputmode="decimal">
+            </div>
+            <div class="cg-progress">
+              <div class="cg-line"><span id="combinedGoalAch"></span><b id="combinedGoalPct"></b></div>
+              <div class="cg-bar"><i id="combinedGoalBar"></i></div>
+              <div class="cg-rem" id="combinedGoalRem"></div>
+            </div>
+          </div>
+        </div>
+        <div class="section-footer" data-i18n="combinedGoalFoot">Adds up the hours or pay of every profile in the month.</div>
+      </div>
     </section>
 
     <section class="tab-page hidden" id="tab-settings">
-      <div class="large-title" data-i18n="titleSettings">Settings</div>
+      <div class="title-row"><div class="large-title" data-i18n="titleSettings">Settings</div><button type="button" class="prof-btn" data-prof-btn></button></div>
 
-      <div class="section-header" data-i18n="sectionLanguage">Language</div>
+      <div class="section-header" data-i18n="sectionShared">All profiles</div>
       <div class="list-group">
         <div class="list-row">
           <div class="rlabel" data-i18n="languageLabel">App language</div>
@@ -713,14 +865,20 @@
           <div class="rlabel" data-i18n="rowHebrewDates">Show Hebrew dates</div>
           <label class="switch"><input type="checkbox" id="setHebDates"><span class="track"></span><span class="thumb"></span></label>
         </div>
-      </div>
-
-      <div class="section-header" data-i18n="sectionPay">Pay</div>
-      <div class="list-group">
         <div class="list-row">
           <div class="rlabel" data-i18n="rowCurrency">Currency symbol</div>
           <input type="text" id="setCurrency" maxlength="4">
         </div>
+      </div>
+
+      <div class="section-header prof-sec" id="profSection"></div>
+      <div class="list-group">
+        <button type="button" class="list-row row-btn" id="profEditRow"><span class="rlabel" data-i18n="rowProfileName">Name &amp; colour</span><span class="row-end"><span class="picker-value" id="profEditValue"></span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></span></span></button>
+        <button type="button" class="list-row row-btn prof-add-row" id="profAddRow"><span class="rlabel"><svg class="ico-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="profileAdd">Add profile</span></span></button>
+      </div>
+
+      <div class="section-header" data-i18n="sectionPay">Pay</div>
+      <div class="list-group">
         <div class="list-row">
           <div class="rlabel" data-i18n="rowRate">Hourly rate</div>
           <input type="number" id="setRate" min="0" step="0.5">

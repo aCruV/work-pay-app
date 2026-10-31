@@ -14,9 +14,11 @@
       document.documentElement.setAttribute('lang', 'he');
     }
   } catch (e) {}
-  // Light/Dark chosen in Settings, applied before first paint (Auto = follow the phone).
+  // Light/Dark chosen in Settings, applied before first paint (Auto = follow the phone): the account's choice
+  // from this phone's copy of the data, otherwise the phone's own (also used on the sign-in screen).
   try {
-    var theme = localStorage.getItem('workTrackerTheme');
+    var saved = JSON.parse(localStorage.getItem('workTrackerData_v2') || 'null');
+    var theme = saved && saved.settings && saved.settings.theme ? saved.settings.theme : localStorage.getItem('workTrackerTheme');
     if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {}
   // After signing out the page reloads behind the launch screen; it starts already drawn so the two look like one.
