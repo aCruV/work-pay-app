@@ -2855,6 +2855,7 @@
   window.addEventListener('popstate', () => {
     if (ignoreNextPop) { ignoreNextPop = false; return; }
     if (pcZoomHistory) { pcZoomHistory = false; closePaycheckZoom(false, true); return; }
+    if (addProfileHistory) { addProfileHistory = false; addProfileBack(); return; }
     if (!sheetHistory) return;
     sheetHistory = false;
     if (sheetIsOpen()) closeSheetOverlay();
@@ -4474,6 +4475,28 @@
   // Adding a profile uses the setup's pages: name, colour and where the pay rules start from, then Pay and
   // Weekend & extras. The profile is created when the first page is done; the later pages edit it like Settings.
   let newProf = null;
+  // Like a sheet, the Add profile pages own one history entry, so the phone's Back goes back a page (and cancels on the
+  // first) instead of leaving the app. Opened from the switcher, the switcher's entry is reused.
+  let addProfileHistory = false;
+  function takeAddProfileHistory() {
+    if (sheetHistory) sheetHistory = false;
+    else { try { history.pushState({ addProfile: true }, ''); } catch (e) { return; } }
+    addProfileHistory = true;
+  }
+  function releaseAddProfileHistory() {
+    if (!addProfileHistory) return;
+    addProfileHistory = false;
+    ignoreNextPop = true;
+    history.back();
+  }
+  function addProfileBack() {
+    if (!newProf) return;
+    if (obStep > 0) {
+      obStep--;
+      renderAddProfile(-1);
+      try { history.pushState({ addProfile: true }, ''); addProfileHistory = true; } catch (e) {}
+    } else cancelAddProfile();
+  }
   function newProfileId() {
     let id;
     do { id = 'p' + Math.random().toString(36).slice(2, 12); } while (!ID_RE.test(id) || account.profiles.some(p => p.id === id));
@@ -4489,6 +4512,7 @@
   }
   function openAddProfile() {
     if (account.profiles.length >= PROFILE_MAX) { showToast(t('profileMax')); return; }
+    takeAddProfileHistory();
     if (sheetIsOpen()) closeSheetOverlay();
     const used = account.profiles.map(profileColor);
     newProf = { name: '', color: PROFILE_COLORS.find(c => !used.includes(c)) || PROFILE_COLORS[0], from: 'default', id: null, appliedFrom: null, prevId: activeProfileId };
@@ -4562,6 +4586,7 @@
   function cancelAddProfile() {
     const np = newProf;
     newProf = null;
+    releaseAddProfileHistory();
     if (np && np.id) {
       account = currentAccount();
       account.profiles = account.profiles.filter(x => x.id !== np.id);
@@ -4574,6 +4599,7 @@
   function finishAddProfile() {
     const np = newProf;
     newProf = null;
+    releaseAddProfileHistory();
     closeOnboarding(() => { if (np) showToast(t('profileAdded').replace('{n}', np.name)); replayEntrance(activeTab); });
   }
 
