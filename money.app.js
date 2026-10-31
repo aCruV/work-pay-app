@@ -1305,7 +1305,8 @@
     ids.forEach((id, i) => {
       const wrap = shiftRowWrap(id);
       if (!wrap) return;
-      if (i === 0) wrap.scrollIntoView({ block: 'center' });
+      // only the page's own scroller moves (scrollIntoView would also nudge the boxes around it, like the app frame)
+      if (i === 0) { const c = $('content'), r = wrap.getBoundingClientRect(), cr = c.getBoundingClientRect(); c.scrollTop += r.top - cr.top - (c.clientHeight - r.height) / 2; }
       wrap.classList.remove('row-flash');
       void wrap.offsetWidth;
       wrap.classList.add('row-flash');
@@ -4385,8 +4386,8 @@
     el.classList.remove('hidden', 'closing');
     el.classList.add('raised', 'opening');
     $('apScroll').scrollTop = 0;
-    const act = $('apPills').querySelector('.pill.active');
-    if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    el.parentElement.scrollLeft = 0;
+    showActiveApPill();
     let finished = false;
     const done = () => {
       if (finished) return;
@@ -4463,6 +4464,14 @@
     }
     return html + '</div>';
   }
+  // Brings the chosen month's pill into view by scrolling only the row of pills. (scrollIntoView would also scroll every
+  // box around it — on iPhone it scrolled the whole app sideways while the page was still sliding in from the side.)
+  function showActiveApPill() {
+    const row = $('apPills'), a = row.querySelector('.pill.active');
+    if (!a) return;
+    const off = a.getBoundingClientRect().left - row.getBoundingClientRect().left;
+    if (off < 0 || off + a.offsetWidth > row.clientWidth) row.scrollLeft += off - (row.clientWidth - a.offsetWidth) / 2;
+  }
   function renderAllPage(force) {
     if (!force && !allPageOpen()) return;
     const list = account.profiles, month = apMonth, months = apMonths();
@@ -4472,8 +4481,7 @@
     const pills = $('apPills');
     pills.innerHTML = [['all', t('allTime')]].concat(months.sort().reverse().map(m => [m, monthLabel(m)])).map(([k, label]) => `<button type="button" class="pill${k === month ? ' active' : ''}" data-month="${k}">${escapeHtml(label)}</button>`).join('');
     pills.querySelectorAll('.pill').forEach(b => b.addEventListener('click', () => { apMonth = b.dataset.month; renderAllPage(); }));
-    const act = pills.querySelector('.pill.active');
-    if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    showActiveApPill();
     const rows = list.map(p => Object.assign({ p }, profilePeriodStats(p, month)));
     const hours = rows.reduce((a, r) => a + r.hours, 0), pay = rows.reduce((a, r) => a + r.pay, 0);
     $('apTotal').textContent = money(pay);
