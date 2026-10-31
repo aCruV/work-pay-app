@@ -345,17 +345,14 @@
   .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
   [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
   /* the All profiles page (from the switcher): every job's shifts and totals on one calendar */
-  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; }
-  /* opening, it slides in over the closing switcher (so the switcher's dimming never shows through it) */
-  .allpage.opening { z-index: 35; animation: apIn .34s var(--ease-sheet) backwards; box-shadow: 0 0 40px rgba(0,0,0,.18); will-change: transform; }
-  [dir="rtl"] .allpage.opening { animation-name: apInRtl; }
-  .allpage.hidden { display: none; }
-  .allpage.closing { animation: apOut .22s var(--ease-in) forwards; pointer-events: none; }
-  [dir="rtl"] .allpage.closing { animation-name: apOutRtl; }
-  @keyframes apIn { from { transform: translateX(100%); } }
-  @keyframes apInRtl { from { transform: translateX(-100%); } }
-  @keyframes apOut { to { transform: translateX(100%); } }
-  @keyframes apOutRtl { to { transform: translateX(-100%); } }
+  /* Always laid out, parked just off the side while closed, so opening is only a slide (nothing has to be built as it
+     starts). It slides in over the switcher, which stays dimmed underneath and closes once it's covered. */
+  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column;
+    transform: translate3d(0, 0, 0); transition: transform .42s cubic-bezier(.22, .61, .36, 1), visibility 0s; }
+  .allpage.raised { z-index: 35; }
+  .allpage.hidden { transform: translate3d(100%, 0, 0); visibility: hidden; pointer-events: none; transition: transform .42s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .42s; }
+  [dir="rtl"] .allpage.hidden { transform: translate3d(-100%, 0, 0); }
+  .allpage.hidden.closing { transition: transform .28s cubic-bezier(.4, 0, .9, .6), visibility 0s linear .28s; }
   .ap-scroll { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: calc(10px + env(safe-area-inset-top)) 16px calc(30px + env(safe-area-inset-bottom)); }
   .ap-nav { display: flex; align-items: center; justify-content: space-between; min-height: 44px; }
   .ap-back { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 16px; color: var(--accent); padding: 10px 0; cursor: pointer; }
@@ -378,7 +375,11 @@
   .ap-edit { flex: none; display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 14px; font-weight: 600; color: var(--accent); padding: 8px 0 8px 4px; cursor: pointer; }
   .ap-edit .ico-chev { width: 13px; height: 13px; transform: rotate(-90deg); }
   [dir="rtl"] .ap-edit .ico-chev { transform: rotate(90deg); }
-  @media (prefers-reduced-motion: reduce) { .allpage.opening, [dir="rtl"] .allpage.opening { animation: fadeIn .2s ease backwards; box-shadow: none; } .allpage.closing, [dir="rtl"] .allpage.closing { animation: fadeOut .2s ease forwards; } }
+  @media (prefers-reduced-motion: reduce) {
+    .allpage, .allpage.hidden, [dir="rtl"] .allpage.hidden, .allpage.hidden.closing { transform: none; transition: opacity .2s ease, visibility 0s linear .2s; }
+    .allpage { transition: opacity .2s ease, visibility 0s; }
+    .allpage.hidden { opacity: 0; }
+  }
   .all-split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px; }
   .all-split i { display: block; background: var(--pf); min-width: 4px; }
   .all-row { justify-content: flex-start; gap: 12px; }

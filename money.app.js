@@ -2904,7 +2904,8 @@
     if (sheetHistory) { sheetHistory = false; if (sheetIsOpen()) closeSheetOverlay(); return; }
     if (allPageHistory) { allPageHistory = false; closeAllProfilesPage(true); }
   });
-  function closeSheetOverlay() {
+  // instant: no slide-down (when something else already covers the sheet, e.g. the All profiles page)
+  function closeSheetOverlay(instant) {
     const overlay = $('sheetOverlay');
     $('sheetSave').style.visibility = '';
     if (sheetMode === 'paycheck') revokePaycheckView();
@@ -2917,11 +2918,11 @@
     }, 0);
     // Keyboard focus leaves the sheet, so a second Enter can't press its button again.
     if (overlay.contains(document.activeElement)) document.activeElement.blur();
-    if (reduceMotion.matches) { overlay.classList.add('hidden'); return; }
+    if (instant === true || reduceMotion.matches) { overlay.classList.add('hidden'); return; }
     overlay.classList.add('closing');
     sheetCloseTimer = setTimeout(() => overlay.classList.add('hidden'), SHEET_CLOSE_MS);
   }
-  $('sheetCancel').addEventListener('click', closeSheetOverlay);
+  $('sheetCancel').addEventListener('click', () => closeSheetOverlay());
   $('sheetOverlay').addEventListener('click', (e) => { if (e.target === $('sheetOverlay')) closeSheetOverlay(); });
 
   function syncWheelScroll(colEl) {
@@ -4376,26 +4377,36 @@
     if (sheetHistory) sheetHistory = false;
     else { try { history.pushState({ allProfiles: true }, ''); } catch (e) {} }
     allPageHistory = true;
-    // drawn before it shows, so the first frame of the slide is already the finished page
+    // Filled in and laid out while still parked off the side, then it only slides. It slides over the switcher, which
+    // keeps its dimming underneath (nothing brightens mid-slide) and closes at once when the page has covered it.
     const el = $('allPage');
     $('apScroll').scrollTop = 0;
     renderAllPage(true);
-    el.classList.remove('hidden', 'closing');
-    el.classList.add('opening');
-    const done = () => el.classList.remove('opening');
-    el.addEventListener('animationend', done, { once: true });
-    setTimeout(done, 450);
-    if (sheetIsOpen()) closeSheetOverlay();
     const act = $('apPills').querySelector('.pill.active');
     if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    el.classList.remove('closing');
+    el.classList.add('raised');
+    void el.offsetWidth;
+    el.classList.remove('hidden');
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      el.removeEventListener('transitionend', onEnd);
+      el.classList.remove('raised');
+      if (sheetMode === 'profiles' && sheetIsOpen()) closeSheetOverlay(true);
+    };
+    const onEnd = e => { if (e.target === el && (e.propertyName === 'transform' || e.propertyName === 'opacity')) done(); };
+    el.addEventListener('transitionend', onEnd);
+    setTimeout(done, 650);
   }
   function hideAllPage() {
     const el = $('allPage');
     if (el.classList.contains('hidden')) return;
-    el.classList.remove('opening');
-    if (reduceMotion.matches && !el.classList.contains('closing')) { el.classList.add('hidden'); return; }
-    el.classList.add('closing');
-    setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); }, 230);
+    el.classList.remove('raised');
+    // slides back out (a little faster than it came in); 'closing' only picks that quicker curve
+    el.classList.add('closing', 'hidden');
+    setTimeout(() => el.classList.remove('closing'), 320);
   }
   // fromBack: the phone's Back already removed the page's history entry.
   function closeAllProfilesPage(fromBack) {
