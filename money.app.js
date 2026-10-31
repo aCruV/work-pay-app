@@ -584,10 +584,55 @@
       el.appendChild(btn);
     }
     el.classList.toggle('has-action', !!action);
+    el.classList.remove('dragging');
+    el.style.transform = el.style.opacity = '';
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), action ? 8000 : 4000);
+    toastTimer = setTimeout(() => el.classList.remove('show'), action ? 6000 : 4000);
   }
+  // A message with a button catches taps (for the button), so it can be dismissed: tap it, or swipe it up (it follows
+  // the finger). Messages without a button never catch taps.
+  (() => {
+    const el = $('toast');
+    let y0 = null, dy = 0, moved = false;
+    const hide = () => {
+      clearTimeout(toastTimer);
+      el.classList.remove('dragging', 'show');
+      el.style.transform = el.style.opacity = '';
+    };
+    el.addEventListener('touchstart', e => {
+      if (!el.classList.contains('show') || e.target.closest('.toast-action')) { y0 = null; return; }
+      y0 = e.touches[0].clientY; dy = 0; moved = false;
+      clearTimeout(toastTimer);
+      el.classList.add('dragging');
+    }, { passive: true });
+    el.addEventListener('touchmove', e => {
+      if (y0 === null) return;
+      dy = Math.min(0, e.touches[0].clientY - y0);
+      if (Math.abs(e.touches[0].clientY - y0) > 6) moved = true;
+      el.style.transform = `translateY(${dy}px)`;
+      el.style.opacity = String(Math.max(0, 1 + dy / 80));
+      e.preventDefault();
+    }, { passive: false });
+    const end = () => {
+      if (y0 === null) return;
+      y0 = null;
+      el.classList.remove('dragging');
+      if (dy < -24 || !moved) {
+        // slides on up and fades out
+        el.style.transform = `translateY(${Math.min(dy, 0) - 40}px)`;
+        el.style.opacity = '0';
+        setTimeout(hide, 220);
+        return;
+      }
+      el.style.transform = el.style.opacity = '';
+      toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+    };
+    el.addEventListener('touchend', end);
+    el.addEventListener('touchcancel', end);
+    // mouse / keyboard-free tap on a computer
+    el.addEventListener('click', e => { if (el.classList.contains('show') && !e.target.closest('.toast-action')) hide(); });
+  })();
 
   // Big, destructive changes (erase, import, restore, re-rating a month) can be undone right after.
   let undoSnapshot = null;
@@ -4331,15 +4376,23 @@
     if (sheetHistory) sheetHistory = false;
     else { try { history.pushState({ allProfiles: true }, ''); } catch (e) {} }
     allPageHistory = true;
-    if (sheetIsOpen()) closeSheetOverlay();
+    // drawn before it shows, so the first frame of the slide is already the finished page
     const el = $('allPage');
-    el.classList.remove('hidden', 'closing');
     $('apScroll').scrollTop = 0;
-    renderAllPage();
+    renderAllPage(true);
+    el.classList.remove('hidden', 'closing');
+    el.classList.add('opening');
+    const done = () => el.classList.remove('opening');
+    el.addEventListener('animationend', done, { once: true });
+    setTimeout(done, 450);
+    if (sheetIsOpen()) closeSheetOverlay();
+    const act = $('apPills').querySelector('.pill.active');
+    if (act) act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   function hideAllPage() {
     const el = $('allPage');
     if (el.classList.contains('hidden')) return;
+    el.classList.remove('opening');
     if (reduceMotion.matches && !el.classList.contains('closing')) { el.classList.add('hidden'); return; }
     el.classList.add('closing');
     setTimeout(() => { el.classList.add('hidden'); el.classList.remove('closing'); }, 230);
@@ -4399,8 +4452,8 @@
     }
     return html + '</div>';
   }
-  function renderAllPage() {
-    if (!allPageOpen()) return;
+  function renderAllPage(force) {
+    if (!force && !allPageOpen()) return;
     const list = account.profiles, month = apMonth, months = apMonths();
     if (month !== 'all' && !months.includes(month)) months.push(month);
     $('apBack').innerHTML = `${ICON_CHEV_L}<span>${escapeHtml(t('allBack'))}</span>`;

@@ -345,8 +345,10 @@
   .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
   [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
   /* the All profiles page (from the switcher): every job's shifts and totals on one calendar */
-  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; animation: apIn .3s var(--ease-out) backwards; }
-  [dir="rtl"] .allpage { animation-name: apInRtl; }
+  .allpage { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; }
+  /* opening, it slides in over the closing switcher (so the switcher's dimming never shows through it) */
+  .allpage.opening { z-index: 35; animation: apIn .34s var(--ease-sheet) backwards; box-shadow: 0 0 40px rgba(0,0,0,.18); will-change: transform; }
+  [dir="rtl"] .allpage.opening { animation-name: apInRtl; }
   .allpage.hidden { display: none; }
   .allpage.closing { animation: apOut .22s var(--ease-in) forwards; pointer-events: none; }
   [dir="rtl"] .allpage.closing { animation-name: apOutRtl; }
@@ -376,7 +378,7 @@
   .ap-edit { flex: none; display: inline-flex; align-items: center; gap: 2px; border: none; background: none; font: inherit; font-size: 14px; font-weight: 600; color: var(--accent); padding: 8px 0 8px 4px; cursor: pointer; }
   .ap-edit .ico-chev { width: 13px; height: 13px; transform: rotate(-90deg); }
   [dir="rtl"] .ap-edit .ico-chev { transform: rotate(90deg); }
-  @media (prefers-reduced-motion: reduce) { .allpage, .allpage.closing, [dir="rtl"] .allpage, [dir="rtl"] .allpage.closing { animation-name: fadeIn; animation-duration: .2s; } .allpage.closing, [dir="rtl"] .allpage.closing { animation-name: fadeOut; } }
+  @media (prefers-reduced-motion: reduce) { .allpage.opening, [dir="rtl"] .allpage.opening { animation: fadeIn .2s ease backwards; box-shadow: none; } .allpage.closing, [dir="rtl"] .allpage.closing { animation: fadeOut .2s ease forwards; } }
   .all-split { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 12px; }
   .all-split i { display: block; background: var(--pf); min-width: 4px; }
   .all-row { justify-content: flex-start; gap: 12px; }
@@ -635,6 +637,8 @@
   #authSubmitBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--on-accent); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
   .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.dragging { transition: none; }
+  .toast.show.has-action { touch-action: none; cursor: pointer; }
   .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
   .auth-field { display: block; border-bottom: 1px solid var(--sep); cursor: text; }
   .auth-field:last-child { border-bottom: none; }
