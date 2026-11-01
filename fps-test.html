@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Frame Rate Test</title>
+<style>
+  body { margin: 0; padding: calc(24px + env(safe-area-inset-top)) 18px 40px; font-family: -apple-system, system-ui, sans-serif; background: #f3f4f7; color: #1a1b1f; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  p { color: #5d6170; font-size: 15px; line-height: 1.45; margin: 0 0 18px; }
+  .lane { position: relative; height: 64px; background: #fff; border-radius: 14px; margin: 8px 0 4px; overflow: hidden; }
+  .bar { position: absolute; top: 12px; left: 12px; width: 40px; height: 40px; border-radius: 10px; background: #2f5da8; will-change: transform; }
+  .label { font-size: 14px; font-weight: 600; margin-top: 18px; }
+  .fps { font-size: 13px; color: #5d6170; }
+  .big { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(var(--w)); } }
+  #css { animation: slide 1.2s ease-in-out infinite alternate; }
+</style></head><body>
+<h1>Frame rate test</h1>
+<p>Both squares move the same way. The top one is moved by the app's own code each frame (like the swipes today). The bottom one is moved by the phone's animation engine (like tapping a tab). If the top one looks less smooth, swipes are running at a lower frame rate.</p>
+<div class="label">1 · Moved frame by frame (like swipes now)</div>
+<div class="lane"><div class="bar" id="raf"></div></div>
+<div class="fps">Frames per second measured: <span class="big" id="fps">…</span></div>
+<div class="label">2 · Moved by the animation engine (like taps)</div>
+<div class="lane" id="lane2"><div class="bar" id="css"></div></div>
+<script>
+  const lane = document.querySelector('.lane'), w = lane.clientWidth - 64;
+  document.getElementById('lane2').style.setProperty('--w', w + 'px');
+  const bar = document.getElementById('raf');
+  let start = null, frames = 0, last = performance.now();
+  const ease = u => u < .5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+  function step(now) {
+    if (start === null) start = now;
+    const t = ((now - start) / 1200) % 2, u = t < 1 ? t : 2 - t;
+    bar.style.transform = `translateX(${ease(u) * w}px)`;
+    frames++;
+    if (now - last >= 1000) { document.getElementById('fps').textContent = Math.round(frames * 1000 / (now - last)); frames = 0; last = now; }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+</script>
+</body></html>
