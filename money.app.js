@@ -713,6 +713,34 @@
   }
   function timeToMinutes(tm) { const [h,m] = tm.split(':').map(Number); return h*60+m; }
 
+  // Shift times are wall-clock times in Israel, so pay is the same on a phone set to another time zone (a trip
+  // abroad): ilDate gives the moment of an Israeli date and time. On a phone set to Israel time it is simply
+  // new Date(...), as it always was. Like new Date, a time skipped when the clocks go forward moves on an hour,
+  // and an hour that repeats when they go back means its first (summer-time) occurrence.
+  const IL_TZ = 'Asia/Jerusalem';
+  const deviceInIsrael = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone === IL_TZ; } catch (e) { return true; } })();
+  let ilFormat = null;
+  function ilWall(t) {
+    ilFormat = ilFormat || new Intl.DateTimeFormat('en-US', { timeZone: IL_TZ, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+    const p = {};
+    ilFormat.formatToParts(new Date(t)).forEach(x => { p[x.type] = +x.value; });
+    return p;
+  }
+  function ilOffsetMs(t) { const p = ilWall(t); return Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute, p.second) - Math.floor(t / 1000) * 1000; }
+  function ilDate(y, mo, d, h = 0, mi = 0) {
+    if (deviceInIsrael) return new Date(y, mo, d, h, mi);
+    const wall = Date.UTC(y, mo, d, h, mi);
+    const offsets = [ilOffsetMs(wall - 43200000), ilOffsetMs(wall + 43200000)].sort((a, b) => b - a);
+    for (const o of offsets) if (ilOffsetMs(wall - o) === o) return new Date(wall - o);
+    return new Date(wall - offsets[1]);
+  }
+  // The Israeli calendar date of a moment: [year, month (0-11), day].
+  function ilDay(t) {
+    if (deviceInIsrael) { const d = new Date(t); return [d.getFullYear(), d.getMonth(), d.getDate()]; }
+    const p = ilWall(t);
+    return [p.year, p.month - 1, p.day];
+  }
+
   // An end time at or before the start time means the shift ends the next day. The next day is
   // found on the calendar (not by adding 24h), so shifts on clock-change nights get their real length.
   function shiftRange(shift) {
@@ -720,7 +748,7 @@
     const [sh, sm] = shift.startTime.split(':').map(Number);
     const [eh, em] = shift.endTime.split(':').map(Number);
     const nextDay = timeToMinutes(shift.endTime) <= timeToMinutes(shift.startTime) ? 1 : 0;
-    return { start: new Date(y, mo-1, d, sh, sm), end: new Date(y, mo-1, d + nextDay, eh, em) };
+    return { start: ilDate(y, mo-1, d, sh, sm), end: ilDate(y, mo-1, d + nextDay, eh, em) };
   }
 
   // A window whose end equals its start has no length (no weekend bonus), not a whole week.
@@ -736,25 +764,22 @@
     const durationMin = windowDurationMinutes(settings);
     if (durationMin <= 0) return 0;
     let overlapMs = 0;
-    let cursor = new Date(start);
-    cursor.setDate(cursor.getDate() - 8);
-    cursor.setHours(0,0,0,0);
-    const limit = new Date(end.getTime() + 24*3600*1000);
-    let guard = 0;
-    while (cursor <= limit && guard < 40) {
-      guard++;
-      if (cursor.getDay() === settings.weekendStartDow) {
-        const [sh, sm] = settings.weekendStartTime.split(':').map(Number);
-        const winStart = new Date(cursor);
-        winStart.setHours(sh, sm, 0, 0);
-        // The window ends at a wall-clock time a set number of days later (calendar math, DST-safe).
-        const endWall = sh*60 + sm + durationMin;
-        const winEnd = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + Math.floor(endWall/1440), Math.floor((endWall%1440)/60), endWall%60);
-        const overlapStart = Math.max(start.getTime(), winStart.getTime());
-        const overlapEnd = Math.min(end.getTime(), winEnd.getTime());
-        if (overlapEnd > overlapStart) overlapMs += (overlapEnd - overlapStart);
-      }
-      cursor.setDate(cursor.getDate()+1);
+    // Israeli calendar days from 8 days before the start until a day after the end (calendar math, DST-safe)
+    const [y0, m0, d0] = ilDay(start.getTime());
+    const limit = end.getTime() + 24*3600*1000;
+    const [sh, sm] = settings.weekendStartTime.split(':').map(Number);
+    for (let i = -8; i < 40; i++) {
+      const day = new Date(Date.UTC(y0, m0, d0 + i)); // a calendar date; only its getUTC* parts are used
+      const y = day.getUTCFullYear(), m = day.getUTCMonth(), d = day.getUTCDate();
+      if (ilDate(y, m, d).getTime() > limit) break;
+      if (day.getUTCDay() !== settings.weekendStartDow) continue;
+      const winStart = ilDate(y, m, d, sh, sm);
+      // The window ends at a wall-clock time a set number of days later.
+      const endWall = sh*60 + sm + durationMin;
+      const winEnd = ilDate(y, m, d + Math.floor(endWall/1440), Math.floor((endWall%1440)/60), endWall%60);
+      const overlapStart = Math.max(start.getTime(), winStart.getTime());
+      const overlapEnd = Math.min(end.getTime(), winEnd.getTime());
+      if (overlapEnd > overlapStart) overlapMs += (overlapEnd - overlapStart);
     }
     return overlapMs / 3600000;
   }
@@ -770,11 +795,13 @@
     const items = list.map(s => { const r = shiftRange(s); return { s, start: +r.start, end: +r.end }; })
       .sort((a, b) => a.start - b.start || a.end - b.end);
     const map = new Map();
-    let periodEnd = -Infinity, worked = 0;
+    let periodEnd = -Infinity, worked = 0; // worked: hours covered so far in the period, each hour once
     items.forEach(it => {
       if (it.start - periodEnd >= REST_GAP_MS) worked = 0;
-      map.set(it.s.id, { key: shiftKey(it.s), carry: worked });
-      worked += (it.end - it.start) / 3600000;
+      // Earlier shifts that run past this one's start overlap it; that overlapping time isn't worked "before" it.
+      // (Shifts are sorted by start, so everything covered after this start is the single stretch up to periodEnd.)
+      map.set(it.s.id, { key: shiftKey(it.s), carry: worked - Math.max(0, periodEnd - it.start) / 3600000 });
+      worked += Math.max(0, it.end - Math.max(it.start, periodEnd)) / 3600000;
       periodEnd = Math.max(periodEnd, it.end);
     });
     return map;
