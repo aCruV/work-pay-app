@@ -358,6 +358,8 @@
   let firestoreUnsub = null;
   // paychecks (see "paychecks" below); declared here because the Summary can be drawn before that code runs
   const PC_MAX_FILES = 3, PC_MAX_BYTES = 5 * 1024 * 1024, PC_CHUNK = 900000, PC_MAX_CHUNKS = 6;
+  // At most this many bytes of paycheck files per account, counted in users/{uid}/meta/usage (same cap in firestore.rules).
+  const PC_QUOTA = 100 * 1024 * 1024;
   const PC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
   // Photos bigger than this, or wider/taller than PC_IMG_MAX px, are scaled down (still easy to read).
   const PC_SHRINK_OVER = 1.5 * 1024 * 1024, PC_IMG_MAX = 2200;
@@ -1894,6 +1896,10 @@
     renderPaychecks();
     const finish = key => { showToast(t(key)); pcSaving.delete(savingKey); renderPaychecks(); };
     const began = Date.now(); // the slot check and the save share one time limit (PC_SAVE_WAIT_MS)
+    // A job added a moment ago must reach the server first: the rules only accept files of the account's own jobs.
+    if (writeTimer || syncing) { try { await flushRemoteWrite(); } catch (e) {} }
+    const used = await paycheckUsage(uid, true);
+    if (typeof used === 'number' && used + bytes.length > PC_QUOTA) return finish('pcQuotaFull');
     // Two tries: if another device took the free slot between the check and the save (the server refuses
     // writing over an existing file), the slots are checked again once.
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1909,6 +1915,8 @@
       const details = { month, slot, name, type, fileSize: bytes.length, chunks, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
       if (pid !== MAIN_PROFILE) details.profile = pid;
       batch.set(ref, details);
+      // the storage count goes up by the file's size (servers with rules from before the count can't take it)
+      if (used !== 'old-rules') batch.set(usageRef(uid), { bytes: firebase.firestore.FieldValue.increment(bytes.length), last: ref.id, op: 'add' }, { merge: true });
       // A connection that looks online but can't reach the server would keep "Saving…" spinning forever, so the
       // wait is capped. The save itself can't be cancelled; it keeps going and finishes when the connection does.
       let gaveUp = false;
@@ -1940,16 +1948,37 @@
     return blob;
   }
 
-  function deletePaycheckDocs(uid, p) {
+  function usageRef(uid) { return db.collection('users').doc(uid).collection('meta').doc('usage'); }
+  // The storage count, from the server when it can be reached, else this device's copy. null: not known (or the
+  // server's rules are from before the count, which refuse reading it).
+  async function paycheckUsage(uid, fromServer) {
+    try {
+      const read = fromServer ? usageRef(uid).get({ source: 'server' }) : usageRef(uid).get();
+      const snap = await Promise.race([read, new Promise((_, no) => setTimeout(() => no(new Error('timed out')), PC_SLOT_WAIT_MS))]);
+      return snap.exists ? (snap.data().bytes || 0) : 0;
+    } catch (err) {
+      return err && err.code === 'permission-denied' ? 'old-rules' : null;
+    }
+  }
+  // p: { id, fileSize }. Every possible piece is removed, so nothing is left behind even if the count was off. The
+  // count goes down by the file's size in the same batch (not below 0: files saved before the count weren't counted).
+  async function deletePaycheckDocs(uid, p) {
     const ref = paychecksRef(uid).doc(p.id);
-    const batch = db.batch();
-    // every possible piece is removed, so nothing is left behind even if the count was off
-    for (let i = 0; i < PC_MAX_CHUNKS; i++) batch.delete(ref.collection('chunks').doc(String(i)));
-    batch.delete(ref);
-    return batch.commit();
+    const used = Number.isFinite(p.fileSize) ? await paycheckUsage(uid, false) : null;
+    const commit = withCount => {
+      const batch = db.batch();
+      for (let i = 0; i < PC_MAX_CHUNKS; i++) batch.delete(ref.collection('chunks').doc(String(i)));
+      batch.delete(ref);
+      if (withCount) batch.set(usageRef(uid), { bytes: used >= p.fileSize ? firebase.firestore.FieldValue.increment(-p.fileSize) : 0, last: p.id, op: 'del' }, { merge: true });
+      return batch.commit();
+    };
+    const withCount = typeof used === 'number' && used > 0;
+    // if the count on this device was out of date the server refuses it; the file is then removed without it
+    return commit(withCount).catch(err => { if (withCount && err && err.code === 'permission-denied') return commit(false); throw err; });
   }
   function deleteAllPaychecks(uid) {
-    return paychecksRef(uid).get().then(snap => Promise.all(snap.docs.map(d => deletePaycheckDocs(uid, { id: d.id }))));
+    return paychecksRef(uid).get().then(snap => Promise.all(snap.docs.map(d => deletePaycheckDocs(uid, { id: d.id, fileSize: d.data().fileSize }))))
+      .then(() => usageRef(uid).delete().catch(() => {}));
   }
 
   // File name used when saving: "Paycheck 2026-10.pdf", a second one that month "Paycheck 2026-10 (2).jpg".
@@ -4952,7 +4981,7 @@
     if (currentUser) {
       const uid = currentUser.uid;
       paychecksRef(uid).get()
-        .then(snap => Promise.all(snap.docs.filter(d => (d.data().profile || MAIN_PROFILE) === id).map(d => deletePaycheckDocs(uid, { id: d.id }))))
+        .then(snap => Promise.all(snap.docs.filter(d => (d.data().profile || MAIN_PROFILE) === id).map(d => deletePaycheckDocs(uid, { id: d.id, fileSize: d.data().fileSize }))))
         .catch(err => { console.error('Profile paychecks delete failed:', err); showToast(t('profileDeleteFailed')); });
     }
     if (wasOpen) playProfileSwitch(account.profiles[0], refreshAll);
