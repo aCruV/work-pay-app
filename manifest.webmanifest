@@ -1,0 +1,14 @@
+{
+  "name": "Shifts Tracker",
+  "short_name": "Shifts",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f4f7",
+  "theme_color": "#f3f4f7",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "splash-logo.png", "sizes": "288x288", "type": "image/png" }
+  ]
+}

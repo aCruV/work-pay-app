@@ -546,6 +546,7 @@
         syncing = null;
         inflightJson = null;
         if (syncAgain) { syncAgain = false; return flushRemoteWrite(); }
+        renderSyncStatus();
       });
     return syncing;
   }
@@ -658,6 +659,8 @@
   function getLang() { return state.settings.language === 'he' ? 'he' : 'en'; }
   function t(key) { return I18N[getLang()][key] || key; }
   // "1 shift" / "3 shifts": the "…One" text for exactly one, the other with {n} (or the given placeholder) filled in
+  // A shift's hours, kept left to right in Hebrew too ("09:00–17:00", the usual way to write times in Israel).
+  function timeRange(a, b) { return '\u2066' + a + '–' + b + '\u2069'; }
   function tCount(key, n, ph = '{n}') { return n === 1 ? t(key + 'One') : t(key).replace(ph, n); }
   function categoryLabel(cat) { return CATEGORY_LABELS[getLang()][cat] || cat; }
 
@@ -1369,8 +1372,8 @@
     }
     const overlapping = findOverlaps(state.shifts);
     const otherRow = ({ p, s }) => `<div class="entry-row-wrap other-wrap"><button type="button" class="other-row" data-switch-prof="${escapeHtml(p.id)}" data-date="${s.date}"
-        aria-label="${escapeHtml(t('otherRowLabel').replace(/\{n\}/g, profileName(p)).replace('{d}', formatDateDisplay(s.date)).replace('{t}', `${s.startTime}–${s.endTime}`))}">
-        ${profAvatar(p, 'sm')}<span class="other-text"><b>${escapeHtml(profileName(p))}</b> · ${escapeHtml(formatDateDisplay(s.date))} · ${s.startTime}–${s.endTime}</span>
+        aria-label="${escapeHtml(t('otherRowLabel').replace(/\{n\}/g, profileName(p)).replace('{d}', formatDateDisplay(s.date)).replace('{t}', `${timeRange(s.startTime, s.endTime)}`))}">
+        ${profAvatar(p, 'sm')}<span class="other-text"><b>${escapeHtml(profileName(p))}</b> · ${escapeHtml(formatDateDisplay(s.date))} · ${timeRange(s.startTime, s.endTime)}</span>
         <span class="other-switch">${escapeHtml(t('otherSwitch'))}${ICON_CHEV_R}</span></button></div>`;
     // newest first; on a day with both, this profile's shifts come first
     const items = shifts.map(s => ({ s, key: s.date + '1' + s.startTime })).concat(others.map(o => ({ o, key: o.s.date + '0' + o.s.startTime })))
@@ -1388,7 +1391,7 @@
         <div class="entry-row" data-id="${escapeHtml(s.id)}" data-kind="shift">
           <div class="entry-main">
             <div class="entry-date">${escapeHtml(dname)}${hd ? `<span class="heb-date" lang="he">${escapeHtml(hd.day + ' ' + hd.month)}</span>` : ''}</div>
-            <div class="entry-sub">${s.startTime}–${s.endTime} · ${hrsText(fmt(c.totalHours))}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
+            <div class="entry-sub">${timeRange(s.startTime, s.endTime)} · ${hrsText(fmt(c.totalHours))}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
             <div class="entry-badges">${badges}</div>
           </div>
           <div class="entry-amount">${escapeHtml(money(c.pay))}</div>
@@ -1586,7 +1589,7 @@
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    if (file.size > LIMITS.importBytes) { alert(t('alertImportTooBig')); return; }
+    if (file.size > LIMITS.importBytes) { showToast(t('alertImportTooBig')); return; }
     const reader = new FileReader();
     reader.onload = () => {
       let data;
@@ -1596,7 +1599,7 @@
       } catch (err) {
         // A plain message in the app's language; the technical reason (e.g. a JSON parse error) only goes to the console.
         console.warn('Import refused:', err && err.message);
-        alert(t('alertImportFail') + t('alertImportInvalid'));
+        showToast(t('alertImportInvalid'));
         return;
       }
       // A file saved with profiles replaces the whole account. A file from before profiles replaces only the profile
@@ -1604,7 +1607,11 @@
       // share (language, currency, appearance, Hebrew dates) stay as they are.
       const withProfiles = 'profiles' in data || 'profile' in data || data.v === 2;
       const onlyThis = !withProfiles && account.profiles.length > 1;
-      if (!confirm(onlyThis ? t('confirmImportProfile').replace('{n}', profileName(activeProfile())) : t('confirmImport'))) return;
+      askAction({ title: t('asImportTitle'), text: onlyThis ? t('confirmImportProfile').replace('{n}', profileName(activeProfile())) : t('confirmImport'), confirm: t('asRestore') }).then(ok => { if (ok) importNow(data, withProfiles, onlyThis); });
+    };
+    reader.onerror = () => showToast(t('alertImportInvalid'));
+    reader.readAsText(file);
+    function importNow(data, withProfiles, onlyThis) {
       rememberForUndo();
       if (withProfiles) {
         setAccount(docToAccount(data));
@@ -1620,9 +1627,7 @@
       save();
       refreshAll();
       offerUndo(t('alertImportOk'));
-    };
-    reader.onerror = () => alert(t('alertImportFail') + t('alertImportInvalid'));
-    reader.readAsText(file);
+    }
   });
 
   $('resetBtn').addEventListener('click', openEraseSheet);
@@ -1743,7 +1748,9 @@
     const entry = outdatedShiftsByMonth().find(([m]) => m === month);
     if (!entry) return;
     const shifts = entry[1];
-    if (!confirm(tCount('confirmApplyRates', shifts.length).replace('{m}', monthLongLabel(month)))) return;
+    askAction({ title: t('asUpdateTitle'), text: tCount('confirmApplyRates', shifts.length).replace('{m}', monthLongLabel(month)), confirm: t('asUpdate'), danger: false })
+      .then(ok => { if (ok) applyRates(); });
+    function applyRates() {
     rememberForUndo();
     const id = ensureCurrentRateSet();
     const ids = new Set(shifts.map(s => s.id));
@@ -1751,6 +1758,7 @@
     save();
     refreshAll();
     offerUndo(tCount('ratesApplied', shifts.length));
+    }
   }
 
   // ---- cloud backups: one snapshot per day, last BACKUP_KEEP_DAYS kept ----
@@ -1818,7 +1826,8 @@
       $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
         const entry = entries.find(e => e.id === row.dataset.backup);
         const label = labelFor(entry.id);
-        if (!confirm(t('confirmRestore').replace('{d}', label))) return;
+        askAction({ title: t('asRestoreTitle').replace('{d}', label), text: t('asRestoreText'), confirm: t('asRestore') }).then(ok => { if (ok) restoreNow(); });
+        function restoreNow() {
         rememberForUndo();
         setAccount(entry.data);
         save();
@@ -1826,6 +1835,7 @@
         closeSheetOverlay();
         refreshAll();
         offerUndo(t('restoreDone').replace('{d}', label));
+        }
       }));
     }).catch(err => {
       console.error('Loading backups failed:', err);
@@ -1908,7 +1918,9 @@
     if (type !== 'application/pdf' && file.size > PC_MAX_PHOTO_BYTES) throw new Error('pcTooBigPhoto');
     let bytes = new Uint8Array(await file.arrayBuffer());
     let name = String(file.name || 'paycheck').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || 'paycheck';
-    if (type !== 'application/pdf' && (bytes.length > PC_SHRINK_OVER || await imageTooLarge(file))) {
+    const size = type === 'application/pdf' ? null : await imageSize(file);
+    if (type !== 'application/pdf' && !size) throw new Error('pcBadImage');
+    if (type !== 'application/pdf' && (bytes.length > PC_SHRINK_OVER || Math.max(size.w, size.h) > PC_IMG_MAX)) {
       const small = await shrinkImage(new Blob([bytes], { type }));
       if (small) {
         bytes = new Uint8Array(await small.arrayBuffer());
@@ -1920,12 +1932,13 @@
     if (!bytes.length) throw new Error('pcBadType');
     return { bytes, type, name };
   }
-  function imageTooLarge(blob) {
+  // { w, h } of an image, or null when it can't be opened (a damaged file)
+  function imageSize(blob) {
     return new Promise(resolve => {
       const url = URL.createObjectURL(blob);
       const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(url); resolve(Math.max(img.naturalWidth, img.naturalHeight) > PC_IMG_MAX); };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(false); };
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img.naturalWidth ? { w: img.naturalWidth, h: img.naturalHeight } : null); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
       img.src = url;
     });
   }
@@ -2362,11 +2375,15 @@
           <button type="button" class="btn-danger btn-block" id="pcDeleteBtn">${escapeHtml(t('pcDelete'))}</button>
         </div>`;
       $('pcZoomOpen').addEventListener('click', () => openPaycheckZoom(pcViewUrl, p));
+      const img = $('sheetBody').querySelector('img.pc-preview');
+      if (img) img.addEventListener('error', () => { const btn = $('pcZoomOpen'); if (btn) btn.outerHTML = `<div class="empty-state">${escapeHtml(t('pcCantShow'))}</div>`; });
       $('pcSaveBtn').addEventListener('click', () => deliverFile(blob, paycheckFileName(p)));
       // Deleting closes the viewer and drops the file from the list at once, instead of waiting for the
       // cloud to confirm (which can take a moment on a phone). If the cloud refuses, the file comes back.
       $('pcDeleteBtn').addEventListener('click', () => {
-        if (!confirm(t('pcConfirmDelete').replace('{name}', p.name))) return;
+        askAction({ title: t('asDeletePcTitle').replace('{name}', '\u2068' + p.name + '\u2069'), text: t('asDeletePcText'), confirm: t('pcDelete') }).then(ok => { if (ok) deleteNow(); });
+      });
+      const deleteNow = () => {
         const uid = currentUser.uid;
         paychecks = paychecks.filter(x => x.id !== p.id);
         pcBlobCache.delete(p.id);
@@ -2374,7 +2391,7 @@
         renderDataViews();
         showToast(t('pcDeleted'));
         deletePaycheckDocs(uid, p).catch(err => { console.error('Paycheck delete failed:', err); showToast(t('pcDeleteFailed')); });
-      });
+      };
     }).catch(err => {
       console.error('Opening paycheck failed:', err);
       if (sheetMode === 'paycheck') $('sheetBody').innerHTML = `<div class="empty-state">${escapeHtml(t('pcOpenFailed'))}</div>`;
@@ -3090,6 +3107,70 @@
     if (activeTab === 'shifts') openAddChoiceSheet();
   });
 
+  // ---- in-app questions instead of the browser's pop-ups ----
+  // An action sheet (iPhone style) for the few things that need a real "are you sure?": resolves true for the action,
+  // false for Cancel, a tap outside it or the phone's Back.
+  let asResolve = null, asHistory = false;
+  function askAction({ title, text, confirm: action, danger = true }) {
+    if (asResolve) asResolve(false);
+    $('asTitle').textContent = title;
+    $('asText').textContent = text || '';
+    $('asText').classList.toggle('hidden', !text);
+    const btn = $('asConfirm');
+    btn.textContent = action;
+    btn.classList.toggle('danger', danger);
+    $('asCancel').textContent = t('cancel');
+    $('asOverlay').classList.remove('hidden', 'closing');
+    try { history.pushState({ actionSheet: true }, ''); asHistory = true; } catch (e) {}
+    setTimeout(() => btn.focus(), 50);
+    return new Promise(resolve => { asResolve = resolve; });
+  }
+  function closeActionSheet(result, fromBack) {
+    if (!asResolve) return;
+    const resolve = asResolve;
+    asResolve = null;
+    if (!fromBack && asHistory) { asHistory = false; ignoreNextPop = true; history.back(); }
+    const el = $('asOverlay');
+    if (reduceMotion.matches) el.classList.add('hidden');
+    else { el.classList.add('closing'); setTimeout(() => { if (!asResolve) el.classList.add('hidden'); el.classList.remove('closing'); }, 200); }
+    resolve(result);
+  }
+  $('asConfirm').addEventListener('click', () => closeActionSheet(true));
+  $('asCancel').addEventListener('click', () => closeActionSheet(false));
+  $('asOverlay').addEventListener('click', e => { if (e.target === $('asOverlay')) closeActionSheet(false); });
+  // A field that needs fixing: its row's label turns red with the reason under its group; typing clears it.
+  function fieldError(input, msg) {
+    const row = input && input.closest('.list-row');
+    if (!row) { showToast(msg); return; }
+    row.classList.add('bad');
+    const group = row.closest('.list-group') || row;
+    let line = group.nextElementSibling;
+    if (!line || !line.classList.contains('field-err')) { line = document.createElement('div'); line.className = 'field-err'; line.setAttribute('role', 'alert'); group.after(line); }
+    line.innerHTML = `${ICON_WARN}<span>${escapeHtml(msg)}</span>`;
+    const clear = () => { row.classList.remove('bad'); line.remove(); };
+    row.querySelectorAll('input, select').forEach(el => el.addEventListener('input', clear, { once: true }));
+    row.scrollIntoView({ block: 'nearest' });
+    if (input.focus && input.tagName === 'INPUT') input.focus();
+  }
+  // A save that needs a second tap ("Save anyway") while what it warns about stays the same.
+  let saveAnywayKey = null;
+  function needsSecondTap(key) {
+    if (saveAnywayKey === key) return false;
+    saveAnywayKey = key;
+    const btn = $('sheetSave');
+    btn.textContent = t('saveAnyway');
+    btn.classList.add('warn');
+    const w = $('fClash');
+    if (w) { w.classList.remove('hidden'); w.scrollIntoView({ block: 'nearest' }); }
+    return true;
+  }
+  function resetSaveAnyway() {
+    saveAnywayKey = null;
+    const btn = $('sheetSave');
+    btn.textContent = t('save');
+    btn.classList.remove('warn');
+  }
+
   // ---- sheet plumbing ----
   const SHEET_CLOSE_MS = 200;
   let sheetCloseTimer = null;
@@ -3104,6 +3185,7 @@
   }
   window.addEventListener('popstate', () => {
     if (ignoreNextPop) { ignoreNextPop = false; return; }
+    if (asHistory) { asHistory = false; closeActionSheet(false, true); return; }
     if (pcZoomHistory) { pcZoomHistory = false; closePaycheckZoom(false, true); return; }
     if (addProfileHistory) { addProfileHistory = false; addProfileBack(); return; }
     if (sheetHistory) { sheetHistory = false; if (sheetIsOpen()) closeSheetOverlay(); return; }
@@ -3114,6 +3196,7 @@
   function closeSheetOverlay(instant) {
     const overlay = $('sheetOverlay');
     $('sheetSave').style.visibility = '';
+    resetSaveAnyway();
     if (sheetMode === 'paycheck') revokePaycheckView();
     sheetMode = null;
     editingId = null;
@@ -3329,8 +3412,19 @@
     try { backedUp = !!currentUser && localStorage.getItem('workTrackerBackup_' + currentUser.uid) === todayStr(); } catch (e) {}
     $('backupSub').textContent = t(backedUp ? 'backupToday' : 'backupDaily');
     $('appFooter').classList.toggle('hidden', !many);
+    renderSyncStatus();
     if (spKey) renderSetPageHead();
   }
+  // "Signed in · All changes saved" or "· Changes waiting to upload" (offline, or a save that hasn't gone through yet)
+  function renderSyncStatus() {
+    const el = $('acctSyncSub');
+    if (!el) return;
+    const waiting = !!currentUser && (navigator.onLine === false || !!writeTimer || !!syncing || hasLocalChanges());
+    el.textContent = t('rowSignedInAs') + (currentUser ? ' · ' + t(waiting ? 'syncWaiting' : 'syncSaved') : '');
+    el.classList.toggle('sync-waiting', waiting);
+  }
+  window.addEventListener('offline', renderSyncStatus);
+  window.addEventListener('online', () => setTimeout(renderSyncStatus, 3000));
   // The weekend window as a week: each day's column is filled for the part of it inside the window (as on the calendar).
   function renderWeekStrip() {
     const s = state.settings, mins = windowDurationMinutes(s);
@@ -3427,6 +3521,11 @@
   function applyTheme(choice) {
     if (choice === 'light' || choice === 'dark') document.documentElement.setAttribute('data-theme', choice);
     else document.documentElement.removeAttribute('data-theme');
+    const light = $('themeColorLight'), dark = $('themeColorDark');
+    if (light && dark) {
+      light.media = choice === 'auto' ? '(prefers-color-scheme: light)' : choice === 'light' ? 'all' : 'not all';
+      dark.media = choice === 'auto' ? '(prefers-color-scheme: dark)' : choice === 'dark' ? 'all' : 'not all';
+    }
     $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.themeChoice === choice));
   }
   $('themeToggle').querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', () => {
@@ -3471,7 +3570,7 @@
     container.innerHTML = templates.map(tpl => `
       <button class="tpl-chip-select" data-apply="${escapeHtml(tpl.id)}">
         <span class="tpl-name">${escapeHtml(tpl.name)}</span>
-        <span class="tpl-time">${tpl.startTime}–${tpl.endTime}</span>
+        <span class="tpl-time">${timeRange(tpl.startTime, tpl.endTime)}</span>
       </button>`).join('');
     container.querySelectorAll('[data-apply]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -3501,7 +3600,7 @@
     const arrow = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
     el.innerHTML = state.templates.map((tpl, i) => `
       <div class="list-row picker-row tpl-row" data-template-id="${escapeHtml(tpl.id)}">
-        <div class="rlabel">${escapeHtml(tpl.name)}<span class="rsub">${tpl.startTime}–${tpl.endTime}</span></div>
+        <div class="rlabel">${escapeHtml(tpl.name)}<span class="rsub">${timeRange(tpl.startTime, tpl.endTime)}</span></div>
         ${last > 0 ? `<div class="tpl-order">
           <button type="button" class="tpl-move" data-move="-1" aria-label="${escapeHtml(t('moveUp'))}" ${i === 0 ? 'disabled' : ''}>${arrow('M6 15l6-6 6 6')}</button>
           <button type="button" class="tpl-move" data-move="1" aria-label="${escapeHtml(t('moveDown'))}" ${i === last ? 'disabled' : ''}>${arrow('M6 9l6 6 6-6')}</button>
@@ -3574,9 +3673,10 @@
     initTimePicker($('panelTplEnd'), formTemplate.endTime, v => { formTemplate.endTime = v; $('valTplEnd').textContent = v; });
     setupPickerToggles($('sheetBody'));
     if (tpl) $('fDelete').addEventListener('click', () => {
-      if (!confirm(t('confirmDeleteTemplate'))) return;
+      rememberForUndo();
       state.templates = state.templates.filter(x => x.id !== id);
       save(); closeSheetOverlay(); renderTemplatesSettings();
+      offerUndo(t('templateDeleted'));
     });
     openSheetOverlay();
   }
@@ -3650,7 +3750,6 @@
       </div>` : ''}`;
     $('fCategory').addEventListener('change', () => { $('fCustomCatRow').classList.toggle('hidden', $('fCategory').value !== 'other'); });
     if (a && !ended) $('fStopAddition').addEventListener('click', () => {
-      if (!confirm(t('confirmStopAddition').replace('{m}', monthLongLabel(cur)))) return;
       rememberForUndo();
       const [y, m] = cur.split('-').map(Number);
       const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
@@ -3660,11 +3759,13 @@
       offerUndo(t('additionStopped'));
     });
     if (a) $('fDeleteAddition').addEventListener('click', () => {
-      if (!confirm(t('confirmDeleteAddition'))) return;
-      rememberForUndo();
-      state.additions = state.additions.filter(x => x.id !== a.id);
-      save(); closeSheetOverlay(); refreshAll();
-      offerUndo(t('additionDeleted'));
+      askAction({ title: t('asDeleteAdditionTitle').replace('{n}', categoryLabel(a.category)), text: t('asDeleteAdditionText'), confirm: t('asDelete') }).then(ok => {
+        if (!ok) return;
+        rememberForUndo();
+        state.additions = state.additions.filter(x => x.id !== a.id);
+        save(); closeSheetOverlay(); refreshAll();
+        offerUndo(t('additionDeleted'));
+      });
     });
     openSheetOverlay();
   }
@@ -3883,7 +3984,7 @@
     // The name and the time are isolated from each other, so a name in the other script (e.g. a Hebrew
     // name in the English app) can't flip the order of the times next to it (22:00–06:00 shown as 06:00–22:00).
     const tplChips = state.templates.map(tpl =>
-      `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}"><bdi>${escapeHtml(tpl.name)}</bdi> <span class="week-chip-time">${tpl.startTime}–${tpl.endTime}</span></button>`).join('');
+      `<button type="button" class="week-chip" data-mode="tpl" data-tpl="${escapeHtml(tpl.id)}"><bdi>${escapeHtml(tpl.name)}</bdi> <span class="week-chip-time">${timeRange(tpl.startTime, tpl.endTime)}</span></button>`).join('');
     $('sheetBody').innerHTML = `
       <div class="week-nav">
         <button type="button" class="week-nav-btn" id="weekPrevBtn" aria-label="${escapeHtml(t('weekPrev'))}" ${weekOffset <= -WEEK_NAV_LIMIT ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
@@ -3921,6 +4022,7 @@
           </div>
         </div>`;
       }).join('')}
+      <div class="clash-warn hidden" id="weekSwitchNote" role="status"></div>
       <button type="button" class="btn-accent btn-block" id="weekSaveBtn" disabled></button>`;
     setupPickerToggles($('sheetBody'));
     weekPlan.forEach((d, i) => {
@@ -3949,9 +4051,17 @@
     openSheetOverlay();
   }
 
-  // Picks belong to the week on screen, so ask before switching would discard them.
+  // Picks belong to the week on screen: the first tap on an arrow says they'd be cleared, a second tap switches.
+  let weekSwitchArmed = null;
   function switchWeek(offset) {
-    if (weekPicks().length && !confirm(t('weekSwitchConfirm'))) return;
+    if (weekPicks().length && weekSwitchArmed !== offset) {
+      weekSwitchArmed = offset;
+      const note = $('weekSwitchNote');
+      if (note) { note.textContent = t('weekSwitchNote'); note.classList.remove('hidden'); }
+      document.querySelectorAll('#weekPrevBtn, #weekNextBtn, #weekBackBtn').forEach(b => b.classList.toggle('warn', true));
+      return;
+    }
+    weekSwitchArmed = null;
     openWeekSheet(offset);
   }
 
@@ -3970,10 +4080,10 @@
     const clash = !!times && !!findClash({ date: d.date, startTime: times.start, endTime: times.end }, null);
     const other = times ? findOtherClash({ date: d.date, startTime: times.start, endTime: times.end }, activeProfileId, null) : null;
     const parts = [];
-    if (existing.length) parts.push(t('weekExisting').replace('{s}', existing.map(s => `${s.startTime}–${s.endTime}`).join(', ')));
+    if (existing.length) parts.push(t('weekExisting').replace('{s}', existing.map(s => `${timeRange(s.startTime, s.endTime)}`).join(', ')));
     if (same) parts.push(t('week24h'));
     if (clash) parts.push(t('weekClash'));
-    if (other) parts.push(t('weekClashOther').replace('{n}', profileName(other.p)).replace('{t}', `${other.s.startTime}–${other.s.endTime}`));
+    if (other) parts.push(t('weekClashOther').replace('{n}', profileName(other.p)).replace('{t}', `${timeRange(other.s.startTime, other.s.endTime)}`));
     const el = $('weekExisting' + i);
     el.textContent = parts.join(' · ');
     el.classList.toggle('hidden', !parts.length);
@@ -3984,9 +4094,17 @@
   function weekPicks() {
     return weekPlan.map(d => ({ d, times: weekDayTimes(d) })).filter(x => x.times);
   }
+  let weekClashArmed = null;
   function updateWeekSaveBtn() {
     const btn = $('weekSaveBtn');
     if (!btn) return;
+    weekClashArmed = null;
+    btn.classList.remove('warn');
+    if (weekSwitchArmed !== null) {
+      weekSwitchArmed = null;
+      const note = $('weekSwitchNote'); if (note) note.classList.add('hidden');
+      document.querySelectorAll('#weekPrevBtn, #weekNextBtn, #weekBackBtn').forEach(b => b.classList.remove('warn'));
+    }
     const n = weekPicks().length;
     btn.disabled = n === 0;
     btn.textContent = n === 0 ? t('weekAddNone') : n === 1 ? t('weekAddOne') : t('weekAddN').replace('{n}', n);
@@ -3995,15 +4113,21 @@
   function saveWeekPlan() {
     const picks = weekPicks();
     if (!picks.length) return;
-    if (totalShiftCount() + picks.length > LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
+    if (totalShiftCount() + picks.length > LIMITS.shifts) { showToast(t('alertLimitShifts')); return; }
     const candidates = picks.map(x => ({ id: genId(), date: x.d.date, startTime: x.times.start, endTime: x.times.end, isHoliday: x.d.holiday, note: '' }));
     // Overlaps with shifts already logged, and between the new shifts themselves (e.g. an overnight shift into the next day).
     const flagged = findOverlaps(candidates);
     candidates.forEach(c => { if (findClash(c, null)) flagged.add(c.id); });
-    if (flagged.size) {
-      const dates = candidates.filter(c => flagged.has(c.id)).map(c => formatDateDisplay(c.date)).join(', ');
-      if (!confirm(t('weekConfirmClash').replace('{d}', dates))) return;
+    // clashes are marked on their days; the button asks for a second tap ("Add 7 shifts anyway")
+    const pickKey = JSON.stringify(picks.map(x => [x.d.date, x.times.start, x.times.end]));
+    if (flagged.size && weekClashArmed !== pickKey) {
+      weekClashArmed = pickKey;
+      const btn = $('weekSaveBtn');
+      btn.textContent = tCount('weekAddAnyway', picks.length);
+      btn.classList.add('warn');
+      return;
     }
+    weekClashArmed = null;
     rememberForUndo();
     const rateId = ensureCurrentRateSet();
     candidates.forEach(c => { c.rateId = rateId; state.shifts.push(c); });
@@ -4017,21 +4141,20 @@
     if (sheetMode === 'profileEdit') { saveProfileEdit(); return; }
     let savedAgain = false;
     if (sheetMode === 'shift') {
-      if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
-      if (formShift.startTime === formShift.endTime && !confirm(t('confirm24h'))) return;
-      if (!editingId && totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
+      if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { fieldError($('valShiftStart'), t('alertFillShiftTimes')); return; }
+      if (!editingId && totalShiftCount() >= LIMITS.shifts) { showToast(t('alertLimitShifts')); return; }
       let customPay = null;
       if ($('fCustomPayOn').checked) {
         const raw = $('fCustomPay').value.trim();
         const v = parseFloat(raw);
-        if (raw === '' || !isValidCustomPay(v)) { alert(t('alertCustomPay')); return; }
+        if (raw === '' || !isValidCustomPay(v)) { fieldError($('fCustomPay'), t('alertCustomPay')); return; }
         customPay = Math.round(v * 100) / 100;
       }
       // a new shift saved into another profile (Add Shift's profile row): its own overlap check, rates and list
       const target = !editingId && formProfileId && formProfileId !== activeProfileId ? account.profiles.find(p => p.id === formProfileId) : null;
       if (target) {
         const own = inProfile(target, () => findClash(formShift, null));
-        if (own && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(own.date)).replace('{t}', `${own.startTime}–${own.endTime}`))) return;
+        if (own && needsSecondTap(formShift.date + formShift.startTime + formShift.endTime + target.id)) return;
         const shiftObj = { id: genId(), date: formShift.date, startTime: formShift.startTime, endTime: formShift.endTime, isHoliday: $('fHoliday').checked, note: $('fNote').value.trim().slice(0, LIMITS.note) };
         if (customPay !== null) shiftObj.customPay = customPay;
         inProfile(target, () => { shiftObj.rateId = ensureCurrentRateSet(); state.shifts.push(shiftObj); });
@@ -4042,7 +4165,7 @@
         return;
       }
       const clash = findClash(formShift, editingId);
-      if (clash && !confirm(t('confirmOverlap').replace('{d}', formatDateDisplay(clash.date)).replace('{t}', `${clash.startTime}–${clash.endTime}`))) return;
+      if (clash && needsSecondTap(formShift.date + formShift.startTime + formShift.endTime)) return;
       const keepRate = formShift.rateId && state.rateSets.some(r => r.id === formShift.rateId);
       const shiftObj = {
         id: editingId || genId(),
@@ -4057,7 +4180,7 @@
         if (idx !== -1) state.shifts[idx] = shiftObj;
         else {
           // deleted on another device while this sheet was open: the edit wins and the shift is kept
-          if (totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
+          if (totalShiftCount() >= LIMITS.shifts) { showToast(t('alertLimitShifts')); return; }
           state.shifts.push(shiftObj);
           savedAgain = true;
         }
@@ -4079,7 +4202,7 @@
         const amount = parseFloat($('fAmount').value);
         const from = $('fFrom').value;
         const value = Math.round(amount * 100) / 100;
-        if (!Number.isFinite(amount) || value <= 0 || amount > 10000000 || !isValidMonth(from)) { alert(t('alertFillAddition')); return; }
+        if (!Number.isFinite(amount) || value <= 0 || amount > 10000000 || !isValidMonth(from)) { fieldError($('fAmount'), t('alertFillAddition')); return; }
         if (existing) {
           existing.category = category;
           existing.from = from;
@@ -4091,7 +4214,7 @@
             existing.versions = existing.versions.filter(v => v.from < point).concat({ from: point, amount: value });
           }
         } else {
-          if (state.additions.length >= LIMITS.additions) { alert(t('alertLimitAdditions')); return; }
+          if (state.additions.length >= LIMITS.additions) { showToast(t('alertLimitAdditions')); return; }
           state.additions.push({ id: genId(), category, from, until: null, versions: [{ from, amount: value }] });
         }
       }
@@ -4101,13 +4224,13 @@
       return;
     } else if (sheetMode === 'template') {
       const name = $('fTplName').value.trim().slice(0, LIMITS.tplName);
-      if (!name) { alert(t('alertFillTemplateName')); return; }
-      if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitTemplates')); return; }
+      if (!name) { fieldError($('fTplName'), t('alertFillTemplateName')); return; }
+      if (!editingId && state.templates.length >= LIMITS.templates) { showToast(t('alertLimitTemplates')); return; }
       const tplObj = { id: editingId || genId(), name, startTime: formTemplate.startTime, endTime: formTemplate.endTime };
       const tplIdx = editingId ? state.templates.findIndex(x => x.id === editingId) : -1;
       if (tplIdx !== -1) state.templates[tplIdx] = tplObj;
       else {
-        if (editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitTemplates')); return; }
+        if (editingId && state.templates.length >= LIMITS.templates) { showToast(t('alertLimitTemplates')); return; }
         state.templates.push(tplObj);
         if (editingId) showToast(t('savedAgain'));
       }
@@ -4305,18 +4428,15 @@
   // Sign-out sends any unsaved change first, then wipes this device's copies of the data.
   $('signOutBtn').addEventListener('click', () => {
     $('signOutBtn').disabled = true;
-    // The launch screen covers the app from the tap until the reloaded page shows the sign-in form.
-    leavingToSignIn = true;
-    showSplashAgain();
     const timeout = new Promise(resolve => setTimeout(resolve, 2500));
-    Promise.race([flushRemoteWrite(), timeout]).then(() => {
+    Promise.race([flushRemoteWrite(), timeout])
       // Changes not yet in the cloud (e.g. made offline) would be lost with this device's copy.
-      if (hasLocalChanges() && !confirm(t('signOutUnsynced'))) {
-        leavingToSignIn = false;
-        hideSplash();
-        $('signOutBtn').disabled = false;
-        return;
-      }
+      .then(() => !hasLocalChanges() || askAction({ title: t('asSignOutTitle'), text: t('signOutUnsynced'), confirm: t('asSignOutLose') }))
+      .then(go => {
+      if (!go) { $('signOutBtn').disabled = false; return; }
+      // The launch screen covers the app from here until the reloaded page shows the sign-in form.
+      leavingToSignIn = true;
+      showSplashAgain();
       return auth.signOut()
         .catch(() => {})
         .then(() => {
@@ -4666,7 +4786,7 @@
     const p = activeProfile(), name = profileName(p);
     const dot = account.profiles.some(x => x.id !== p.id && profileMissesPaycheck(x.id));
     document.querySelectorAll('[data-prof-btn]').forEach(b => {
-      b.innerHTML = `${profAvatar(p)}<span class="prof-name">${escapeHtml(name)}</span>${ICON_CHEV_D}${dot ? '<span class="prof-dot" aria-hidden="true"></span>' : ''}`;
+      b.innerHTML = `${profAvatar(p)}<span class="prof-name" dir="auto">${escapeHtml(name)}</span>${ICON_CHEV_D}${dot ? '<span class="prof-dot" aria-hidden="true"></span>' : ''}`;
       b.setAttribute('aria-label', t('profileBtnLabel').replace('{n}', name) + (dot ? '. ' + t('profileDotLabel') : ''));
     });
     renderSettingsSummary();
@@ -4729,7 +4849,7 @@
     if (!nm || !oldName || reduceMotion.matches) return;
     const name = nm.textContent;
     if (name === oldName) return;
-    nm.innerHTML = `<span class="pn-old">${escapeHtml(oldName)}</span><span class="pn-new">${escapeHtml(name)}</span>`;
+    nm.innerHTML = `<span class="pn-old" dir="auto">${escapeHtml(oldName)}</span><span class="pn-new" dir="auto">${escapeHtml(name)}</span>`;
     setTimeout(() => { if (nm.isConnected && nm.querySelector('.pn-new')) nm.textContent = name; }, 400);
   }
   function switchProfile(id, after) {
@@ -4784,11 +4904,20 @@
   function updateShiftClash() {
     const el = $('fClash');
     if (!el || sheetMode !== 'shift') return;
+    if (saveAnywayKey) resetSaveAnyway();
     const ok = isValidDate(formShift.date) && isValidTime(formShift.startTime) && isValidTime(formShift.endTime);
+    const target = formProfileId && formProfileId !== activeProfileId && !editingId ? account.profiles.find(p => p.id === formProfileId) : null;
+    const own = ok ? (target ? inProfile(target, () => findClash(formShift, null)) : findClash(formShift, editingId)) : null;
     const hit = ok ? findOtherClash(formShift, formProfileId || activeProfileId, editingId) : null;
-    el.classList.toggle('hidden', !hit);
-    if (!hit) { el.innerHTML = ''; return; }
-    el.innerHTML = `${ICON_WARN}<span>${escapeHtml(t('clashOther').replace('{n}', profileName(hit.p)).replace('{d}', formatDateDisplay(hit.s.date)).replace('{t}', `${hit.s.startTime}–${hit.s.endTime}`))}<small>${escapeHtml(t('clashOtherSub'))}</small></span>`;
+    const day24 = ok && formShift.startTime === formShift.endTime;
+    const lines = [];
+    if (own) lines.push(`${ICON_WARN}<span>${escapeHtml(t('clashOwn').replace('{d}', formatDateDisplay(own.date)).replace('{t}', timeRange(own.startTime, own.endTime)))}</span>`);
+    if (day24) lines.push(`${ICON_CLOCK}<span>${escapeHtml(t('shift24hNote').replace('{t}', formShift.endTime))}</span>`);
+    el.classList.toggle('hidden', !hit && !lines.length);
+    el.classList.toggle('note-only', !own && !hit);
+    if (!hit) { el.innerHTML = lines.map(l => `<div class="cw-line">${l}</div>`).join(''); return; }
+    lines.push(`${ICON_WARN}<span>${escapeHtml(t('clashOther').replace('{n}', profileName(hit.p)).replace('{d}', formatDateDisplay(hit.s.date)).replace('{t}', `${timeRange(hit.s.startTime, hit.s.endTime)}`))}<small>${escapeHtml(t('clashOtherSub'))}</small></span>`);
+    el.innerHTML = lines.map(l => `<div class="cw-line">${l}</div>`).join('');
   }
 
   // ---- all profiles together: the All profiles page (opened only from the switcher) ----
@@ -4991,7 +5120,7 @@
     $('sheetSave').style.visibility = 'hidden';
     const items = e.items.slice().sort((a, b) => a.s.startTime.localeCompare(b.s.startTime));
     $('sheetBody').innerHTML = `<div class="list-group">${items.map(({ p, s, c }) => `<div class="list-row ap-shift">${profAvatar(p)}
-        <span class="rlabel">${escapeHtml(profileName(p))}<span class="rsub">${s.startTime}–${s.endTime} · ${escapeHtml(hrsText(fmt(c.totalHours)))}</span></span>
+        <span class="rlabel">${escapeHtml(profileName(p))}<span class="rsub">${timeRange(s.startTime, s.endTime)} · ${escapeHtml(hrsText(fmt(c.totalHours)))}</span></span>
         <span class="stat-val money-private">${escapeHtml(money(c.pay))}</span>
         <button type="button" class="ap-edit" data-prof="${escapeHtml(p.id)}">${escapeHtml(t('allEdit'))}${ICON_CHEV_R}</button></div>`).join('')}
       <div class="list-row bd-total"><span class="rlabel">${escapeHtml(t('allThatDay'))}</span><span class="stat-val money-private">${escapeHtml(hrsText(fmt(e.hours)))} · ${escapeHtml(money(e.pay))}</span></div></div>`;
@@ -5071,7 +5200,7 @@
     const rows = list.map((p, i) => {
       const on = p.id === activeProfileId;
       const miss = profileMissesPaycheck(p.id) ? `<span class="prof-row-dot" title="${escapeHtml(t('profileRowDotLabel'))}"><span class="sr-only">${escapeHtml(t('profileRowDotLabel'))}</span></span>` : '';
-      return `<button type="button" class="list-row row-btn prof-row" data-prof="${escapeHtml(p.id)}"${on ? ' aria-current="true"' : ''}>${profAvatar(p)}<span class="prof-row-name">${escapeHtml(profileName(p))}${miss}</span><span class="prof-row-amt money-private">${escapeHtml(money(totals[i]))}</span>${on ? ICON_TICK : '<span class="prof-tick-space"></span>'}</button>`;
+      return `<button type="button" class="list-row row-btn prof-row" data-prof="${escapeHtml(p.id)}"${on ? ' aria-current="true"' : ''}>${profAvatar(p)}<span class="prof-row-name" dir="auto">${escapeHtml(profileName(p))}${miss}</span><span class="prof-row-amt money-private">${escapeHtml(money(totals[i]))}</span>${on ? ICON_TICK : '<span class="prof-tick-space"></span>'}</button>`;
     }).join('');
     const add = list.length < PROFILE_MAX ? `<button type="button" class="list-row row-btn prof-row add" id="profSheetAdd"><span class="prof-plus">${ICON_PLUS}</span><span class="prof-row-name">${escapeHtml(t('profileAdd'))}</span></button>` : '';
     const all = list.length > 1 ? `<div class="list-group"><button type="button" class="list-row row-btn prof-row prof-all" id="profSheetAll"><span class="prof-stack">${list.map(p => profAvatar(p)).join('')}</span><span class="prof-row-name">${escapeHtml(t('profileAllMonth'))}</span><span class="prof-row-amt money-private">${escapeHtml(money(totals.reduce((a, b) => a + b, 0)))}</span>${ICON_CHEV_R}</button></div>` : '';

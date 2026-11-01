@@ -2,13 +2,16 @@
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; frame-src https://shifts-app-7602e.firebaseapp.com blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.google.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; frame-src https://shifts-app-7602e.firebaseapp.com blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Shifts Tracker">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon-180.png?v=7">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" id="themeColorLight" content="#f3f4f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" id="themeColorDark" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=7">
 <title>Shifts Tracker</title>
 <link rel="preload" href="fonts/rubik-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -362,6 +365,37 @@
   .clash-warn.hidden { display: none; }
   .clash-warn svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
   .clash-warn small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .clash-warn:has(.cw-line) { display: block; }
+  .cw-line { display: flex; gap: 10px; align-items: flex-start; }
+  .cw-line + .cw-line { margin-top: 8px; }
+  .clash-warn.note-only { background: var(--card2); color: var(--text); }
+  .clash-warn.note-only svg { color: var(--accent); }
+  /* a save that needs a second tap, and a field that needs fixing */
+  .sheet-save.warn, .btn-accent.warn { color: var(--red); }
+  .btn-accent.warn { background: var(--red-tint); }
+  .week-nav-btn.warn, #weekPrevBtn.warn, #weekNextBtn.warn, #weekBackBtn.warn { color: var(--red); }
+  .list-row.bad .rlabel, .list-row.bad .rlabel span { color: var(--red); }
+  .field-err { display: flex; gap: 7px; align-items: flex-start; color: var(--red); font-size: 13.5px; line-height: 1.35; margin: -2px 6px 10px; }
+  .field-err svg { flex: none; width: 17px; height: 17px; margin-top: 1px; }
+  /* the action sheet: the iPhone's own kind of "are you sure?", above any sheet */
+  .as-overlay { position: absolute; inset: 0; z-index: 46; display: flex; align-items: flex-end; background: rgba(0,0,0,.4); }
+  .as-overlay.hidden { display: none; }
+  .as { width: 100%; padding: 0 10px calc(10px + env(safe-area-inset-bottom)); }
+  .as-grp { display: block; width: 100%; background: var(--sheet-bg); border-radius: 14px; overflow: hidden; border: none; font: inherit; }
+  .as-msg { padding: 15px 18px 13px; text-align: center; }
+  .as-title { font-size: 14px; font-weight: 600; color: var(--muted); }
+  .as-text { font-size: 13.5px; color: var(--muted); line-height: 1.4; margin-top: 4px; }
+  .as-text.hidden { display: none; }
+  .as-act { display: block; width: 100%; height: 56px; border: none; border-top: 1px solid var(--sep); background: none; font: inherit; font-size: 18px; color: var(--accent); cursor: pointer; }
+  .as-act.danger { color: var(--red); }
+  .as-cancel { margin-top: 8px; height: 56px; font-size: 18px; font-weight: 700; color: var(--accent); cursor: pointer; }
+  .as-act:active, .as-cancel:active { background-color: var(--press); }
+  @media (prefers-reduced-motion: no-preference) {
+    .as-overlay:not(.hidden) { animation: fadeIn .2s ease-out; }
+    .as-overlay:not(.hidden) .as { animation: sheetUp .3s var(--ease-sheet); }
+    .as-overlay.closing { animation: fadeOut .2s ease-in forwards; }
+    .as-overlay.closing .as { animation: sheetDown .2s var(--ease-in) forwards; }
+  }
   .prof-all .ico-chev { color: var(--muted); width: 15px; height: 15px; transform: rotate(-90deg); }
   [dir="rtl"] .prof-all .ico-chev { transform: rotate(90deg); }
   /* the All profiles page (from the switcher): every job's shifts and totals on one calendar */
@@ -451,6 +485,7 @@
   .row-btn:disabled { opacity: .4; cursor: default; }
   .danger-group { margin-top: 26px; }
   .acct-email { min-width: 0; overflow-wrap: anywhere; }
+  .acct-email .rsub.sync-waiting { color: var(--amber); }
   .setpage .large-title { margin-bottom: 4px; }
   .sp-for { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; margin-bottom: 4px; }
   .sp-for:empty { display: none; }
@@ -473,7 +508,8 @@
   .prof-row.add .prof-row-name { color: var(--accent); }
   .prof-row .prof-plus { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--cap); color: var(--accent); display: grid; place-items: center; }
   .prof-row .prof-plus svg { width: 16px; height: 16px; }
-  .prof-all .prof-row-name { font-weight: 500; color: var(--muted); }
+  .prof-all .prof-row-name { font-weight: 500; color: var(--muted); white-space: normal; line-height: 1.25; }
+  [dir="rtl"] .prof-row-name, [dir="rtl"] .pc-name { text-align: right; }
   .prof-all .prof-row-amt { color: var(--text); font-weight: 700; }
   .prof-stack { display: inline-flex; flex: none; }
   .prof-stack .prof-av { width: 22px; height: 22px; font-size: 10px; border: 2px solid var(--card); margin-inline-end: -7px; }
@@ -1078,7 +1114,7 @@
       <div class="title-row"><div class="large-title" data-i18n="titleSettings">Settings</div><button type="button" class="prof-btn" data-prof-btn></button></div>
 
       <div class="list-group">
-        <button type="button" class="list-row row-btn prof-card" id="profEditRow"><span id="profCardAv"></span><span class="pc-text"><span class="pc-name" id="profCardName"></span><span class="pc-sub" id="profCardSub"></span></span><span class="pc-edit" data-i18n="profileEditBtn">Edit</span></button>
+        <button type="button" class="list-row row-btn prof-card" id="profEditRow"><span id="profCardAv"></span><span class="pc-text"><span class="pc-name" id="profCardName" dir="auto"></span><span class="pc-sub" id="profCardSub"></span></span><span class="pc-edit" data-i18n="profileEditBtn">Edit</span></button>
         <button type="button" class="list-row row-btn prof-add-row" id="profAddRow"><span class="rlabel"><svg class="ico-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="profileAdd">Add another job</span></span></button>
       </div>
 
@@ -1143,7 +1179,7 @@
 
       <div class="section-header" data-i18n="sectionAccount">Account</div>
       <div class="list-group">
-        <div class="list-row"><div class="rlabel acct-email"><span id="accountEmail"></span><span class="rsub" data-i18n="rowSignedInAs">Signed in</span></div></div>
+        <div class="list-row"><div class="rlabel acct-email"><span id="accountEmail"></span><span class="rsub" id="acctSyncSub">Signed in</span></div></div>
         <button type="button" class="list-row row-btn" id="changePwBtn"><span class="rlabel" data-i18n="btnChangePassword">Change password</span><span class="chev"><svg class="ico-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></span></button>
         <button type="button" class="list-row row-btn row-act" id="signOutBtn" data-i18n="btnSignOut">Sign out</button>
       </div>
@@ -1185,6 +1221,15 @@
         <button class="sheet-save" id="sheetSave" data-i18n="save">Save</button>
       </div>
       <div class="sheet-body" id="sheetBody"></div>
+    </div>
+  </div>
+  <div class="as-overlay hidden" id="asOverlay">
+    <div class="as" role="alertdialog" aria-modal="true" aria-labelledby="asTitle" aria-describedby="asText">
+      <div class="as-grp">
+        <div class="as-msg"><div class="as-title" id="asTitle"></div><div class="as-text" id="asText"></div></div>
+        <button type="button" class="as-act danger" id="asConfirm"></button>
+      </div>
+      <button type="button" class="as-grp as-cancel" id="asCancel">Cancel</button>
     </div>
   </div>
 </div>
