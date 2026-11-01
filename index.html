@@ -279,8 +279,9 @@
   .badge-custom { background: var(--cap); color: var(--text); }
   .small-btn { flex: none; border: none; background: var(--track-off); color: var(--accent); font-size: 13px; font-weight: 600; padding: 7px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
   .small-btn.hidden { display: none; }
-  .toast.has-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
-  .toast.show.has-action { pointer-events: auto; }
+  /* every message: the text at the start, a button (Undo, Switch) at the end when there is one */
+  .toast { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
+  .toast.show { pointer-events: auto; }
   .toast-action { flex: none; background: none; border: none; color: var(--toast-action); font-size: 14px; font-weight: 700; padding: 4px 2px; cursor: pointer; }
   .entry-amount { text-align: end; font-weight: 700; font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .heb-date { font-family: "Frank Ruhl Libre", serif; font-weight: 500; font-size: 12.5px; color: var(--heb); margin-inline-start: 6px; display: inline-block; white-space: nowrap; } /* moves to the next line as a whole, never split */
@@ -783,10 +784,10 @@
   #authSubmitBtn.busy { opacity: 1; }
   #delBtn.busy { position: relative; color: transparent; opacity: 1; }
   #delBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--red); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
-  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: start; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.dragging { transition: none; }
-  .toast.show.has-action { touch-action: none; cursor: pointer; }
+  .toast.show { touch-action: none; cursor: pointer; }
   .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
 
   /* ---- Luach: the month on the wall calendar; weekend-rate hours sit inside the shaded band ---- */

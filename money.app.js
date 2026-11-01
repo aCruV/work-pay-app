@@ -593,8 +593,7 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove('show'), action ? 6000 : 4000);
   }
-  // A message with a button catches taps (for the button), so it can be dismissed: tap it, or swipe it up (it follows
-  // the finger). Messages without a button never catch taps.
+  // Every message can be dismissed: tap it, or swipe it up (it follows the finger). Its button (Undo, Switch) still works.
   (() => {
     const el = $('toast');
     let y0 = null, dy = 0, moved = false;
