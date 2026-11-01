@@ -784,8 +784,10 @@
   #authSubmitBtn.busy { opacity: 1; }
   #delBtn.busy { position: relative; color: transparent; opacity: 1; }
   #delBtn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border-radius: 50%; border: 2.4px solid var(--red); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
-  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 12px 14px; border-radius: 12px; text-align: start; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 60; background: var(--toast-bg); color: #fff; font-size: 14px; padding: 13px 14px; border-radius: 14px; line-height: 1.35; box-shadow: 0 8px 24px rgba(0,0,0,.25); text-align: start; opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; pointer-events: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
+  :root[data-theme="dark"] .toast { box-shadow: 0 8px 28px rgba(0,0,0,.6); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast { box-shadow: 0 8px 28px rgba(0,0,0,.6); } }
   .toast.dragging { transition: none; }
   .toast.show { touch-action: none; cursor: pointer; }
   .toast { transition: opacity .2s ease, transform .3s var(--ease-out); }
