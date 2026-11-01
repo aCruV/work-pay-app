@@ -639,12 +639,13 @@
   // Big, destructive changes (erase, import, restore, re-rating a month) can be undone right after.
   let undoSnapshot = null;
   function rememberForUndo() { undoSnapshot = currentDoc(); }
-  function offerUndo(msg) {
+  function offerUndo(msg, onUndo) {
     const snapshot = undoSnapshot;
     if (!snapshot) { showToast(msg); return; }
     showToast(msg, {
       label: t('undo'),
       onClick: () => {
+        if (onUndo) onUndo();
         setAccount(docToAccount(snapshot));
         save();
         flushRemoteWrite();
@@ -1628,9 +1629,43 @@
       flushRemoteWrite();
       closeSheetOverlay();
       refreshAll();
-      offerUndo(t('eraseDone'));
+      const wipe = schedulePaycheckWipe();
+      offerUndo(t('eraseDone'), () => wipe.cancel());
     });
     openSheetOverlay();
+  }
+
+  // Erasing also deletes the paycheck files, but only once Undo is no longer offered (files can't be brought back).
+  // The files to delete are noted on this device, so if the app is closed before then, the next start finishes it.
+  const WIPE_KEY = 'workTrackerPaycheckWipe';
+  const WIPE_DELAY_MS = 7000; // a moment after the Undo message (6 s) has gone
+  function schedulePaycheckWipe() {
+    if (!currentUser) return { cancel() {} };
+    const uid = currentUser.uid;
+    let cancelled = false, timer = null;
+    const listed = paychecksLoaded ? Promise.resolve(paychecks.map(p => ({ id: p.id, fileSize: p.fileSize })))
+      : paychecksRef(uid).get().then(snap => snap.docs.map(d => ({ id: d.id, fileSize: d.data().fileSize }))).catch(() => []);
+    listed.then(ids => {
+      if (cancelled || !ids.length) return;
+      const pending = { uid, at: Date.now(), ids };
+      try { localStorage.setItem(WIPE_KEY, JSON.stringify(pending)); } catch (e) {}
+      timer = setTimeout(() => runPaycheckWipe(pending), WIPE_DELAY_MS);
+    });
+    return { cancel() { cancelled = true; clearTimeout(timer); try { localStorage.removeItem(WIPE_KEY); } catch (e) {} } };
+  }
+  async function runPaycheckWipe(pending) {
+    if (!currentUser || currentUser.uid !== pending.uid) return;
+    try {
+      // one at a time, so the storage count stays right
+      for (const p of pending.ids) await deletePaycheckDocs(pending.uid, p);
+      try { localStorage.removeItem(WIPE_KEY); } catch (e) {}
+    } catch (err) { console.warn('Paycheck clean-up after erase will be retried:', err && err.code); }
+  }
+  function resumePaycheckWipe(uid) {
+    let pending = null;
+    try { pending = JSON.parse(localStorage.getItem(WIPE_KEY) || 'null'); } catch (e) {}
+    // reopened before Undo would have run out: wait for the rest of that time first
+    if (pending && pending.uid === uid && Array.isArray(pending.ids)) setTimeout(() => runPaycheckWipe(pending), Math.max(0, WIPE_DELAY_MS - (Date.now() - pending.at)));
   }
 
   function monthLongLabel(m) {
@@ -1646,7 +1681,7 @@
     const current = rateKey(currentRates());
     const byMonth = new Map();
     state.shifts.forEach(s => {
-      if (rateKey(ratesFor(s)) === current) return;
+      if (isValidCustomPay(s.customPay) || rateKey(ratesFor(s)) === current) return;
       const m = monthKey(s.date);
       byMonth.set(m, (byMonth.get(m) || []).concat(s));
     });
@@ -3648,9 +3683,9 @@
       if (on) $('fCustomPay').focus();
     });
     if (shift) $('fDelete').addEventListener('click', () => {
-      if (!confirm(t('confirmDeleteShift'))) return;
       closeSheetOverlay();
-      collapseRow(shiftRowWrap(id), () => deleteShift(id));
+      rememberForUndo();
+      collapseRow(shiftRowWrap(id), () => { deleteShift(id); offerUndo(t('shiftDeleted')); });
     });
     openSheetOverlay();
   }
@@ -4220,14 +4255,17 @@
   }
   $('changePwBtn').addEventListener('click', openChangePasswordSheet);
 
-  function openDeleteAccountSheet() {
+  // resume: the data was deleted last time but removing the sign-in didn't finish (see DELETE_PENDING_KEY)
+  function openDeleteAccountSheet(resume) {
     if (!auth.currentUser) return;
     sheetMode = 'account'; editingId = null;
     const word = t('eraseWord');
     $('sheetTitle').textContent = t('deleteAccTitle');
     $('sheetSave').style.visibility = 'hidden';
     $('sheetBody').innerHTML = `
-      <div class="erase-warning"><strong>${escapeHtml(t('deleteAccWarnTitle'))}</strong>${escapeHtml(t('deleteAccWarnBody'))}</div>
+      ${resume === true ? `<div class="erase-warning"><strong>${escapeHtml(t('deleteAccResumeTitle'))}</strong>${escapeHtml(t('deleteAccResume'))}</div>
+        <button type="button" class="btn-plain btn-block" id="delKeepBtn" style="margin-bottom:14px;">${escapeHtml(t('deleteAccKeep'))}</button>`
+        : `<div class="erase-warning"><strong>${escapeHtml(t('deleteAccWarnTitle'))}</strong>${escapeHtml(t('deleteAccWarnBody'))}</div>`}
       <form id="delForm" novalidate>
         <input type="email" autocomplete="username" value="${escapeHtml(auth.currentUser.email || '')}" hidden>
         <div class="field-group">
@@ -4241,6 +4279,14 @@
         <button type="submit" class="btn-danger btn-block" id="delBtn" disabled>${escapeHtml(t('deleteAccBtn'))}</button>
       </form>`;
     const ready = () => $('delPassword').value.length > 0 && $('delConfirm').value.trim().toUpperCase() === word.toUpperCase();
+    if ($('delKeepBtn')) $('delKeepBtn').addEventListener('click', () => {
+      // keep the account: start again with an empty one in the cloud
+      try { localStorage.removeItem(DELETE_PENDING_KEY); } catch (e) {}
+      closeSheetOverlay();
+      remoteReady = true;
+      saveLocal();
+      flushRemoteWrite();
+    });
     ['delPassword', 'delConfirm'].forEach(id => $(id).addEventListener('input', () => { $('delBtn').disabled = !ready(); }));
     $('delForm').addEventListener('submit', e => {
       e.preventDefault();
@@ -4250,6 +4296,7 @@
       $('delMsg').textContent = '';
       const user = auth.currentUser;
       const uid = user.uid;
+      let dataGone = false;
       reauthenticate($('delPassword').value)
         .then(() => {
           // Stop syncing first so nothing re-creates the data while it's being removed.
@@ -4262,7 +4309,13 @@
         })
         .then(() => { stopPaycheckSync(); return deleteAllPaychecks(uid); })
         .then(() => db.collection('users').doc(uid).delete())
+        .then(() => confirmUserDocGone(uid))
         .then(() => {
+          // The data is gone. This device's copy goes too, and a note stays until the sign-in is removed, so if that
+          // last step fails nothing can upload the copy again; the next start offers to finish instead.
+          dataGone = true;
+          try { localStorage.setItem(DELETE_PENDING_KEY, uid); } catch (e) {}
+          clearLocalCache();
           // The launch screen covers the app from here until the reloaded page shows the sign-in form (as on sign-out).
           leavingToSignIn = true;
           showSplashAgain();
@@ -4270,7 +4323,7 @@
         })
         .then(() => {
           clearLocalCache();
-          try { localStorage.removeItem(REMEMBER_KEY); localStorage.removeItem('workTrackerBackup_' + uid); } catch(e) {}
+          try { localStorage.removeItem(REMEMBER_KEY); localStorage.removeItem('workTrackerBackup_' + uid); localStorage.removeItem(DELETE_PENDING_KEY); } catch(e) {}
           return db.terminate().then(() => db.clearPersistence()).catch(() => {});
         })
         .then(() => splashSettled($('splash')))
@@ -4281,14 +4334,31 @@
         .catch(err => {
           console.error('Account deletion failed:', err);
           if (leavingToSignIn) { leavingToSignIn = false; hideSplash(); }
+          if (dataGone) {
+            // what's on screen was deleted: show an empty account, and say exactly what happened
+            const fresh = defaultState();
+            fresh.settings.language = state.settings.language;
+            setAccount(docToAccount(fresh));
+            refreshAll();
+          }
           $('delBtn').classList.remove('busy');
-          $('delMsg').textContent = authErrorMessage(err);
+          $('delMsg').textContent = dataGone ? t('deleteAccPartial') : authErrorMessage(err);
           $('delBtn').disabled = !ready();
         });
     });
     openSheetOverlay();
   }
-  $('deleteAccountBtn').addEventListener('click', openDeleteAccountSheet);
+  $('deleteAccountBtn').addEventListener('click', () => openDeleteAccountSheet());
+  const DELETE_PENDING_KEY = 'workTrackerDeletePending';
+  // The document is deleted again if anything wrote it back meanwhile; the sign-in is only removed once it's really gone.
+  async function confirmUserDocGone(uid) {
+    const ref = db.collection('users').doc(uid);
+    for (let i = 0; i < 3; i++) {
+      if (!(await ref.get({ source: 'server' })).exists) return;
+      await ref.delete();
+    }
+    throw new Error('The account document could not be removed');
+  }
 
   function applyRemoteState(incoming) {
     const doc = accountToDoc(incoming);
@@ -5298,8 +5368,12 @@
           if (state.settings.language !== lang) { state.settings.language = lang; save(); refreshAll(); }
         }
         // The day's backup is taken from server-confirmed data, before today's edits.
-        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid, normalizeDoc(snap.data())); }
+        if (!backupChecked && !snap.metadata.fromCache) { backupChecked = true; runDailyBackup(user.uid, normalizeDoc(snap.data())); resumePaycheckWipe(user.uid);
+          try { if (localStorage.getItem(DELETE_PENDING_KEY) === user.uid) localStorage.removeItem(DELETE_PENDING_KEY); } catch (e) {} }
       } else if (!snap.metadata.fromCache) {
+        let unfinished = false;
+        try { unfinished = localStorage.getItem(DELETE_PENDING_KEY) === user.uid; } catch (e) {}
+        if (unfinished) { setTimeout(() => openDeleteAccountSheet(true), 900); return; }
         // New account: seed it with this device's data only if that data belongs to this user.
         remoteReady = true;
         pendingAuthLang = null;
