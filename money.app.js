@@ -657,6 +657,8 @@
 
   function getLang() { return state.settings.language === 'he' ? 'he' : 'en'; }
   function t(key) { return I18N[getLang()][key] || key; }
+  // "1 shift" / "3 shifts": the "…One" text for exactly one, the other with {n} (or the given placeholder) filled in
+  function tCount(key, n, ph = '{n}') { return n === 1 ? t(key + 'One') : t(key).replace(ph, n); }
   function categoryLabel(cat) { return CATEGORY_LABELS[getLang()][cat] || cat; }
 
   let activeTab = 'summary';
@@ -1034,7 +1036,7 @@
         : hours + (l.pcts.size === 1 ? ' · ' + [...l.pcts][0] + '%' : '');
       html += row(t('bd_' + key), sub, Math.round(l.amount * 100) / 100);
     });
-    additions.forEach(x => { if (x.amount > 0) html += row(x.label, months.length > 1 ? t('bdAdditionMonths').replace('{n}', x.months) : t('bdAddition'), x.amount); });
+    additions.forEach(x => { if (x.amount > 0) html += row(x.label, months.length > 1 ? tCount('bdAdditionMonths', x.months) : t('bdAddition'), x.amount); });
     const wrap = $('payBreakdownWrap');
     wrap.classList.toggle('hidden', !html);
     if (!html) return;
@@ -1727,7 +1729,7 @@
     const shown = ratesListExpanded ? months : months.slice(0, RATES_LIST_VISIBLE);
     el.innerHTML = shown.map(([m, list]) => `
       <div class="list-row picker-row" data-rates-month="${m}">
-        <div class="rlabel">${escapeHtml(monthLongLabel(m))}<span class="rsub">${escapeHtml(t('ratesListCount').replace('{n}', list.length))}</span></div>
+        <div class="rlabel">${escapeHtml(monthLongLabel(m))}<span class="rsub">${escapeHtml(tCount('ratesListCount', list.length))}</span></div>
         <span class="entry-chevron">${ICON_CHEV_R}</span>
       </div>`).join('') + (hidden ? `
       <div class="list-row picker-row rates-toggle" id="ratesListToggle">
@@ -1741,14 +1743,14 @@
     const entry = outdatedShiftsByMonth().find(([m]) => m === month);
     if (!entry) return;
     const shifts = entry[1];
-    if (!confirm(t('confirmApplyRates').replace('{n}', shifts.length).replace('{m}', monthLongLabel(month)))) return;
+    if (!confirm(tCount('confirmApplyRates', shifts.length).replace('{m}', monthLongLabel(month)))) return;
     rememberForUndo();
     const id = ensureCurrentRateSet();
     const ids = new Set(shifts.map(s => s.id));
     state.shifts.forEach(s => { if (ids.has(s.id)) s.rateId = id; });
     save();
     refreshAll();
-    offerUndo(t('ratesApplied').replace('{n}', shifts.length));
+    offerUndo(tCount('ratesApplied', shifts.length));
   }
 
   // ---- cloud backups: one snapshot per day, last BACKUP_KEEP_DAYS kept ----
@@ -1810,7 +1812,7 @@
       $('restoreList').innerHTML = `
         <div class="list-group">${entries.map(e => `
           <div class="list-row picker-row" data-backup="${e.id}">
-            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(t('backupEntry').replace('{s}', shiftsIn(e.data)))}</span></div>
+            <div class="rlabel">${escapeHtml(labelFor(e.id))}<span class="rsub">${escapeHtml(tCount('backupEntry', shiftsIn(e.data), '{s}'))}</span></div>
             <span class="entry-chevron">${ICON_CHEV_R}</span>
           </div>`).join('')}</div>`;
       $('sheetBody').querySelectorAll('[data-backup]').forEach(row => row.addEventListener('click', () => {
@@ -2577,7 +2579,7 @@
         : t('reportOvertimeOff');
       return [
         `${t('reportRate')}: ${money(r.rate)}`,
-        `${t('reportWeekend')}: ${r.weekendPercent}% · ${DOW_FULL[lang][r.weekendStartDow]} ${r.weekendStartTime} ${dash} ${DOW_FULL[lang][r.weekendEndDow]} ${r.weekendEndTime}`,
+        windowDurationMinutes(r) > 0 ? `${t('reportWeekend')}: ${r.weekendPercent}% · ${DOW_FULL[lang][r.weekendStartDow]} ${r.weekendStartTime} ${dash} ${DOW_FULL[lang][r.weekendEndDow]} ${r.weekendEndTime}` : `${t('reportWeekend')}: ${t('reportNoWindow')}`,
         `${t('reportHoliday')}: ${r.holidayPercent}%`,
         `${t('reportOvertime')}: ${overtime}`
       ];
@@ -2606,7 +2608,7 @@
       return [
         dateFmt(x.date), dayFmt(x.date), x.startTime, x.endTime, fmt(c.totalHours), money(ratesFor(x).rate),
         c.windowHours > 0 ? fmt(c.windowHours) : dash, c.overtimeHours > 0 ? fmt(c.overtimeHours) : dash,
-        x.isHoliday ? t('reportYes') : dash, money(c.pay), x.note || ''
+        x.isHoliday && !c.custom ? t('reportYes') : dash, money(c.pay), [c.custom ? t('reportCustomPay') : '', x.note || ''].filter(Boolean).join(' · ')
       ];
     });
     // Widths are in Word twips; landscape A4 content width is 15398.
@@ -2885,7 +2887,7 @@
         const list = state.shifts.filter(x => monthKey(x.date) === mo);
         const pay = list.reduce((sum, x) => sum + calcShift(x).pay, 0);
         return `<div class="list-row picker-row" data-report-month="${mo}">
-          <div class="rlabel">${escapeHtml(monthLongLabel(mo))}<span class="rsub">${escapeHtml(t('reportShiftsCount').replace('{n}', list.length))} · ${escapeHtml(money(pay))}</span></div>
+          <div class="rlabel">${escapeHtml(monthLongLabel(mo))}<span class="rsub">${escapeHtml(tCount('reportShiftsCount', list.length))} · ${escapeHtml(money(pay + additionsTotal(mo)))}</span></div>
           <span class="entry-chevron">${ICON_CHEV_R}</span>
         </div>`;
       }).join('')}</div>`;
@@ -3993,7 +3995,7 @@
   function saveWeekPlan() {
     const picks = weekPicks();
     if (!picks.length) return;
-    if (totalShiftCount() + picks.length > LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+    if (totalShiftCount() + picks.length > LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
     const candidates = picks.map(x => ({ id: genId(), date: x.d.date, startTime: x.times.start, endTime: x.times.end, isHoliday: x.d.holiday, note: '' }));
     // Overlaps with shifts already logged, and between the new shifts themselves (e.g. an overnight shift into the next day).
     const flagged = findOverlaps(candidates);
@@ -4017,7 +4019,7 @@
     if (sheetMode === 'shift') {
       if (!isValidDate(formShift.date) || !isValidTime(formShift.startTime) || !isValidTime(formShift.endTime)) { alert(t('alertFillShiftTimes')); return; }
       if (formShift.startTime === formShift.endTime && !confirm(t('confirm24h'))) return;
-      if (!editingId && totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+      if (!editingId && totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
       let customPay = null;
       if ($('fCustomPayOn').checked) {
         const raw = $('fCustomPay').value.trim();
@@ -4055,7 +4057,7 @@
         if (idx !== -1) state.shifts[idx] = shiftObj;
         else {
           // deleted on another device while this sheet was open: the edit wins and the shift is kept
-          if (totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitReached')); return; }
+          if (totalShiftCount() >= LIMITS.shifts) { alert(t('alertLimitShifts')); return; }
           state.shifts.push(shiftObj);
           savedAgain = true;
         }
@@ -4089,7 +4091,7 @@
             existing.versions = existing.versions.filter(v => v.from < point).concat({ from: point, amount: value });
           }
         } else {
-          if (state.additions.length >= LIMITS.additions) { alert(t('alertLimitReached')); return; }
+          if (state.additions.length >= LIMITS.additions) { alert(t('alertLimitAdditions')); return; }
           state.additions.push({ id: genId(), category, from, until: null, versions: [{ from, amount: value }] });
         }
       }
@@ -4100,12 +4102,12 @@
     } else if (sheetMode === 'template') {
       const name = $('fTplName').value.trim().slice(0, LIMITS.tplName);
       if (!name) { alert(t('alertFillTemplateName')); return; }
-      if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
+      if (!editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitTemplates')); return; }
       const tplObj = { id: editingId || genId(), name, startTime: formTemplate.startTime, endTime: formTemplate.endTime };
       const tplIdx = editingId ? state.templates.findIndex(x => x.id === editingId) : -1;
       if (tplIdx !== -1) state.templates[tplIdx] = tplObj;
       else {
-        if (editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitReached')); return; }
+        if (editingId && state.templates.length >= LIMITS.templates) { alert(t('alertLimitTemplates')); return; }
         state.templates.push(tplObj);
         if (editingId) showToast(t('savedAgain'));
       }
