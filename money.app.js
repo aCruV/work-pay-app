@@ -1684,6 +1684,7 @@
     if (!currentUser || currentUser.uid !== pending.uid) return;
     try {
       // one at a time, so the storage count stays right
+      dropQueued(pending.uid);
       for (const p of pending.ids) await deletePaycheckDocs(pending.uid, p);
       try { localStorage.removeItem(WIPE_KEY); } catch (e) {}
     } catch (err) { console.warn('Paycheck clean-up after erase will be retried:', err && err.code); }
@@ -1853,8 +1854,10 @@
     paycheckUnsub = paychecksRef(user.uid).onSnapshot(snap => {
       paychecks = snap.docs.map(d => ({ id: d.id, ...d.data() }))
         .filter(p => /^\d{4}-\d{2}$/.test(p.month) && PC_TYPES[p.type] && p.chunks >= 1);
+      const first = !paychecksLoaded;
       paychecksLoaded = true;
       renderDataViews();
+      if (first) setTimeout(flushPaycheckQueue, 1000);
     }, err => console.error('Paychecks sync error:', err));
   }
   function stopPaycheckSync() {
@@ -1944,19 +1947,26 @@
   async function uploadPaycheck(month, file) {
     if (!currentUser) return;
     const pid = activeProfileId; // the file belongs to the profile open when it was picked, even if the user switches meanwhile
-    if (paychecksLoaded && paychecksFor(month, pid).length >= PC_MAX_FILES) { showToast(t('pcFull')); return; }
-    if (navigator.onLine === false) { showToast(t('pcOffline')); return; }
+    if (paychecksLoaded && paychecksFor(month, pid).length + queuedFor(month, pid).length >= PC_MAX_FILES) { showToast(t('pcFull')); return; }
     let prepared;
     try { prepared = await preparePaycheckFile(file); }
     catch (err) { showToast(t(err && /^pc/.test(err.message) ? err.message : 'pcBadType')); return; }
+    if (Math.ceil(prepared.bytes.length / PC_CHUNK) > PC_MAX_CHUNKS) { showToast(t('pcTooBig')); return; }
+    const uid = currentUser.uid;
+    // No connection: the file waits on this phone and is sent when the connection is back (see flushPaycheckQueue).
+    if (navigator.onLine === false) { await queuePaycheck(uid, pid, month, prepared); showToast(t('pcQueued')); return; }
+    const key = await savePaycheck(uid, pid, month, prepared);
+    if (key === 'retry') { await queuePaycheck(uid, pid, month, prepared); showToast(t('pcQueued')); return; }
+    showToast(t(key));
+  }
+  // Saves one prepared file. Resolves a message key, or 'retry' when the server couldn't be reached (the file can wait).
+  async function savePaycheck(uid, pid, month, prepared) {
     const { bytes, type, name } = prepared;
     const chunks = Math.ceil(bytes.length / PC_CHUNK);
-    if (chunks > PC_MAX_CHUNKS) { showToast(t('pcTooBig')); return; }
-    const uid = currentUser.uid;
     const savingKey = pcSavingKey(month, pid);
     pcSaving.add(savingKey);
     renderPaychecks();
-    const finish = key => { showToast(t(key)); pcSaving.delete(savingKey); renderPaychecks(); };
+    const finish = key => { pcSaving.delete(savingKey); renderPaychecks(); return key; };
     const began = Date.now(); // the slot check and the save share one time limit (PC_SAVE_WAIT_MS)
     // A job added a moment ago must reach the server first: the rules only accept files of the account's own jobs.
     if (writeTimer || syncing) { try { await flushRemoteWrite(); } catch (e) {} }
@@ -1967,7 +1977,7 @@
     for (let attempt = 1; attempt <= 2; attempt++) {
       const slot = await freePaycheckSlot(uid, month, pid);
       if (slot === 0) return finish('pcFull');
-      if (slot < 0) return finish('pcUploadFailed');
+      if (slot < 0) return finish('retry');
       const ref = paychecksRef(uid).doc(`${pcIdPrefix(pid)}${month}-${slot}`);
       const batch = db.batch();
       for (let i = 0; i < chunks; i++) {
@@ -1989,15 +1999,86 @@
       }, err => {
         console.error('Paycheck upload failed:', err);
         if (gaveUp) showToast(t('pcUploadFailed'));
-        return err && err.code === 'permission-denied' ? 'taken' : 'fail';
+        return err && err.code === 'permission-denied' ? 'taken' : err && err.code === 'unavailable' ? 'retry' : 'fail';
       });
       const wait = Math.max(5000, PC_SAVE_WAIT_MS - (Date.now() - began));
       const result = await Promise.race([commit, new Promise(res => setTimeout(() => res('slow'), wait))]);
       if (result === 'slow') { gaveUp = true; return finish('pcSlow'); }
       if (result === 'taken' && attempt === 1) continue;
-      return finish(result === 'ok' ? 'pcSaved' : 'pcUploadFailed');
+      return finish(result === 'ok' ? 'pcSaved' : result === 'retry' ? 'retry' : 'pcUploadFailed');
     }
   }
+
+  // ---- paychecks waiting to upload (picked with no connection) ----
+  // Kept in this browser's IndexedDB with the account and job they belong to, listed under their month as "Waiting to
+  // upload" (they count toward the month's 3 files), and sent when the connection is back, also after the app restarts.
+  const QUEUE_DB = 'workTrackerQueue';
+  const QUEUE_MAX_TRIES = 5;
+  let pcQueue = [], queueDbPromise = null, flushingQueue = false;
+  function queueDb() {
+    if (!queueDbPromise) queueDbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(QUEUE_DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('paychecks', { keyPath: 'qid' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return queueDbPromise;
+  }
+  function queueStore(mode, fn) {
+    return queueDb().then(qdb => new Promise((resolve, reject) => {
+      const tx = qdb.transaction('paychecks', mode);
+      const req = fn(tx.objectStore('paychecks'));
+      tx.oncomplete = () => resolve(req && 'result' in req ? req.result : undefined);
+      tx.onerror = () => reject(tx.error);
+    }));
+  }
+  async function loadPaycheckQueue() {
+    try { pcQueue = (await queueStore('readonly', st => st.getAll())) || []; } catch (e) { pcQueue = []; }
+  }
+  function queuedFor(month, pid = activeProfileId) {
+    return currentUser ? pcQueue.filter(q => q.uid === currentUser.uid && q.pid === pid && q.month === month) : [];
+  }
+  async function queuePaycheck(uid, pid, month, prepared) {
+    const item = { qid: genId(), uid, pid, month, name: prepared.name, type: prepared.type, size: prepared.bytes.length, data: prepared.bytes, at: Date.now(), tries: 0 };
+    try { await queueStore('readwrite', st => st.put(item)); } catch (e) { console.warn('Could not keep the paycheck for later:', e); }
+    pcQueue.push(item);
+    renderDataViews();
+  }
+  async function dequeuePaycheck(qid) {
+    pcQueue = pcQueue.filter(q => q.qid !== qid);
+    try { await queueStore('readwrite', st => st.delete(qid)); } catch (e) {}
+  }
+  // drops waiting files of a deleted job, or all of an account's (erase, account deleted)
+  function dropQueued(uid, pid) {
+    pcQueue.filter(q => q.uid === uid && (!pid || q.pid === pid)).forEach(q => dequeuePaycheck(q.qid));
+  }
+  async function flushPaycheckQueue() {
+    if (flushingQueue || !currentUser || navigator.onLine === false || !paychecksLoaded) return;
+    const uid = currentUser.uid;
+    const mine = pcQueue.filter(q => q.uid === uid);
+    if (!mine.length) return;
+    flushingQueue = true;
+    let sent = 0;
+    try {
+      for (const q of mine) {
+        if (!account.profiles.some(p => p.id === q.pid)) { await dequeuePaycheck(q.qid); continue; } // its job was deleted
+        const key = await savePaycheck(uid, q.pid, q.month, { bytes: q.data, type: q.type, name: q.name });
+        if (key === 'retry') break; // still no connection: try again later
+        if (key === 'pcSaved' || key === 'pcSlow') { sent++; await dequeuePaycheck(q.qid); continue; }
+        if (key === 'pcUploadFailed' && ++q.tries < QUEUE_MAX_TRIES) { try { await queueStore('readwrite', st => st.put(q)); } catch (e) {} continue; }
+        await dequeuePaycheck(q.qid);
+        showToast(t('pcQueueFailed').replace('{n}', q.name) + ' ' + t(key));
+      }
+    } finally {
+      flushingQueue = false;
+      renderDataViews();
+    }
+    if (sent) showToast(sent === 1 ? t('pcQueueSentOne') : t('pcQueueSent').replace('{n}', sent));
+  }
+  window.addEventListener('online', () => setTimeout(flushPaycheckQueue, 1500));
+  setInterval(flushPaycheckQueue, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') flushPaycheckQueue(); });
+  loadPaycheckQueue().then(() => { if (currentUser) renderDataViews(); });
 
   async function loadPaycheckBlob(p) {
     if (pcBlobCache.has(p.id)) return pcBlobCache.get(p.id);
@@ -2065,18 +2146,27 @@
     renderPaycheckReminder(reminder);
     // Under "All time" (or signed out) the section is hidden and emptied, so no other month's files linger.
     if (!on) { $('paycheckList').innerHTML = ''; return; }
-    const files = paychecksFor(monthFilter);
+    const files = paychecksFor(monthFilter), waiting = queuedFor(monthFilter);
     let html = files.map(p => `<button type="button" class="list-row pc-row" data-pc="${escapeHtml(p.id)}">
         <span class="pc-ico">${p.type === 'application/pdf' ? ICON_FILE : ICON_IMAGE}</span>
         <span class="rlabel">${escapeHtml(p.name)}<span class="rsub">${escapeHtml(PC_TYPES[p.type].toUpperCase())} · ${escapeHtml(formatBytes(p.fileSize))}</span></span>
         <span class="entry-chevron">${ICON_CHEV_R}</span>
       </button>`).join('');
+    html += waiting.map(q => `<div class="list-row pc-row pc-waiting">
+        <span class="pc-ico">${ICON_CLOCK}</span>
+        <span class="rlabel">${escapeHtml(q.name)}<span class="rsub">${escapeHtml(t('pcWaiting'))} · ${escapeHtml(formatBytes(q.size))}</span></span>
+        <button type="button" class="pc-unqueue" data-unqueue="${escapeHtml(q.qid)}" aria-label="${escapeHtml(t('pcUnqueue'))}">${ICON_X}</button>
+      </div>`).join('');
     if (pcSaving.has(pcSavingKey(monthFilter))) html += `<div class="list-row pc-row pc-busy"><span class="pc-ico pc-spin"></span><span class="rlabel">${escapeHtml(t('pcUploading'))}</span></div>`;
-    else if (files.length < PC_MAX_FILES) html += `<button type="button" class="list-row pc-row pc-add" id="paycheckAddBtn"><span class="pc-ico">${ICON_PLUS}</span><span class="rlabel">${escapeHtml(t(files.length ? 'pcAttachMore' : 'pcAttach'))}</span></button>`;
+    else if (files.length + waiting.length < PC_MAX_FILES) html += `<button type="button" class="list-row pc-row pc-add" id="paycheckAddBtn"><span class="pc-ico">${ICON_PLUS}</span><span class="rlabel">${escapeHtml(t(files.length ? 'pcAttachMore' : 'pcAttach'))}</span></button>`;
     $('paycheckList').innerHTML = html;
     $('paycheckList').querySelectorAll('[data-pc]').forEach(row => row.addEventListener('click', () => {
       const p = paychecks.find(x => x.id === row.dataset.pc);
       if (p) openPaycheckViewer(p);
+    }));
+    $('paycheckList').querySelectorAll('[data-unqueue]').forEach(btn => btn.addEventListener('click', async () => {
+      await dequeuePaycheck(btn.dataset.unqueue);
+      renderDataViews();
     }));
     const add = $('paycheckAddBtn');
     if (add) add.addEventListener('click', () => pickPaycheck(monthFilter));
@@ -2108,7 +2198,7 @@
       if (k === 1 && d.getDate() < PC_REMIND_DAY) continue;
       const m = new Date(d.getFullYear(), d.getMonth() - k, 1);
       const month = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`;
-      if (!dismissed.has(month) && shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month, pid).length && !pcSaving.has(pcSavingKey(month, pid))) out.push(month);
+      if (!dismissed.has(month) && shifts.some(x => monthKey(x.date) === month) && !paychecksFor(month, pid).length && !queuedFor(month, pid).length && !pcSaving.has(pcSavingKey(month, pid))) out.push(month);
     }
     return out; // oldest first
   }
@@ -4351,6 +4441,7 @@
         .then(() => {
           clearLocalCache();
           try { localStorage.removeItem(REMEMBER_KEY); localStorage.removeItem('workTrackerBackup_' + uid); localStorage.removeItem(DELETE_PENDING_KEY); } catch(e) {}
+          dropQueued(uid);
           return db.terminate().then(() => db.clearPersistence()).catch(() => {});
         })
         .then(() => splashSettled($('splash')))
@@ -5077,6 +5168,7 @@
     // its paychecks: the first profile's carry no `profile` field, every other profile's carry its id
     if (currentUser) {
       const uid = currentUser.uid;
+      dropQueued(uid, id); // its files still waiting to upload
       paychecksRef(uid).get()
         .then(snap => Promise.all(snap.docs.filter(d => (d.data().profile || MAIN_PROFILE) === id).map(d => deletePaycheckDocs(uid, { id: d.id, fileSize: d.data().fileSize }))))
         .catch(err => { console.error('Profile paychecks delete failed:', err); showToast(t('profileDeleteFailed')); });

@@ -219,6 +219,11 @@
   .pc-ico svg { width: 18px; height: 18px; }
   .pc-add .rlabel { color: var(--accent); font-weight: 600; }
   .pc-busy { cursor: default; }
+  .pc-waiting { cursor: default; }
+  .pc-waiting .pc-ico { color: var(--muted); }
+  .pc-unqueue { flex: none; width: 34px; height: 34px; border: none; border-radius: 50%; background: var(--track-off); color: var(--muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .pc-unqueue svg { width: 14px; height: 14px; }
+  .pc-unqueue:active { transform: scale(.92); }
   .pc-spin::after { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 2.4px solid var(--accent); border-right-color: transparent; animation: pcSpin .8s linear infinite; }
   @keyframes pcSpin { to { transform: rotate(360deg); } }
   .pc-reminder { display: block; background: var(--card); border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; box-shadow: var(--shadow); font-size: 14px; }
